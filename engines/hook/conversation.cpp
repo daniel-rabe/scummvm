@@ -61,7 +61,15 @@ void HookEngine::startConversation(uint16 structOff, bool inDs) {
 	_convActive = true;
 	_convReply = false;
 	_convPeterTicks = _convNpcTicks = _convPause = 0;
-	_player.actor.frame = 0x1C + _player.facing;
+	// 05DDA: talking pose, unless [AC23] (set by the finale, rooms 40 and 41)
+	if (!dsWord(0xAC23))
+		_player.actor.frame = 0x1C + _player.facing;
+}
+
+void HookEngine::talkToHotspot(uint16 hs) {
+	// 07B35: conversation t of the room: struct = header +84 + 2 + (t - 1) * 24
+	_player.facing = dsWord(hs + 2) & 3;	// [140C] = the hotspot's facing
+	startConversation(_room.word(0x84) + 2 + 24 * (dsWord(hs + 0x14) - 1), false);
 }
 
 void HookEngine::setPeterLine(uint16 ref, int speaker) {

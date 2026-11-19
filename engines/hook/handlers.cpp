@@ -23,6 +23,8 @@
 // code segment and listed in docs/logic-ledger.md of the reverse-engineering project.
 
 #include "common/debug.h"
+#include "common/system.h"
+#include "graphics/paletteman.h"
 
 #include "hook/hook.h"
 
@@ -189,6 +191,11 @@ void HookEngine::roomHookTick() {
 		if (hasItem(0x1E))
 			setDsWord(flag(23), 1);
 		break;
+	case 39:	// ported: AB82
+		_player.actor.depth = 0x80;
+		slotActor(0x14D6).depth = 0x72;
+		slotActor(0x159C).depth = 0x74;
+		break;
 	case 37:	// ported: B256. With the thimble (item 25) and flags 20, 21, 15: sequence 6CF3
 		slotActor(0x14AA).depth = 0x80;
 		if (!hasItem(0x19))
@@ -297,6 +304,36 @@ void HookEngine::roomEntryHook() {
 		setTinkerTarget(0x10C, 0x12E, true);
 		setDsWord(kDsWalkThrough, 0);
 		break;
+	case 39: {	// ported: AB9D. Peter is Pan: PANEL2, MOREPAN2, sequence 7775; the camp as in room 30
+		setDsWord(0x1A0A, 1);
+		// 0AC0B: the Pan panel (the inventory bar cache is reset; the bar is redrawn anyway)
+		Common::String panel((const char *)dsPtr(0x50E));
+		if (!_res.load(panel.c_str(), _panel) || _panel.size() < (uint)kScreenWidth * kPanelHeight)
+			warning("Hook: cannot load %s", panel.c_str());
+		loadPeterBank(0x2CC);		// MOREPAN2.BIN, but [86EF] names MOREPAN1 (sic)
+		setDsWord(0x86EF, 0x2BF);
+		startSequence(0x7775);
+		static const int16 frames[] = { 0x19, 0x1A, 0x19 };
+		for (int i = 0; i < 3; i++) {
+			Actor &a = slotActor(0x155A + kSlotSize * i);
+			a.frame = frames[i];
+			a.y = 0x4B;
+		}
+		setDsWord(hotspotBase() + 0x108 + 4, 3);
+		break;
+	}
+	case 40:	// ported: AC66. Sequence 7B6F; Tinkerbell flies in from the right
+		startSequence(0x7B6F);
+		setTinkerTarget(0x2F0, 0x3B, false);
+		setDsWord(0x18C6, 0x31E);
+		setDsWord(0x18C8, 0x30);
+		setDsWord(0x8739, 1);
+		break;
+	case 41:	// ported: AC9A. Sequence 7D59; no conversation running, no line
+		startSequence(0x7D59);
+		_convActive = false;
+		setDsWord(0xABFB, 0);
+		break;
 	default:
 		break;
 	}
@@ -369,6 +406,180 @@ void HookEngine::tinkerTick() {
 	setDsWord(0x1832, blink);
 	for (int i = 1; i < 6; i++)
 		_actors[i].frame = 2 * (i - 1) + (blink & 1);
+}
+
+bool HookEngine::tinkerHit(int cx, int cy) const {
+	// 07A12: Tinkerbell is shown (not in rooms 29 and 37) and the point is in the 16x16 box
+	// left of and below her slot (actor 1)
+	if (_room.number() == 0x25 || _room.number() == 0x1D || !dsWord(0x8739))
+		return false;
+	int x = _actors[1].x, y = _actors[1].y;
+	return x - 0x10 <= cx && x >= cx && y <= cy && y + 0x10 >= cy;
+}
+
+void HookEngine::tinkerTalk(int cx, int cy) {
+	// ported: 880F. TALK to Tinkerbell (the sound 0B02C belongs to M5). She answers through the
+	// temporary conversation at DS:A997 with her line in [A9BD] and the bubble at [A9AB]/[A9AD].
+	if (_room.number() == 0x26) {
+		// room 38: the three clues found (flags 10, 11, 12) start the flashback, sequence 7283
+		setDsWord(0xA9AB, 0x10C);
+		setDsWord(0xA9AD, 0x12E);
+		if (dsWord(flag(12)) && dsWord(flag(11)) && dsWord(flag(10))) {
+			startSequence(0x7283);
+			return;
+		}
+		setDsWord(0xA9BD, 0x24);
+	} else {
+		// 0885F: a hint chosen by the play time: 8 lists of 256 ticks (cs:A9C5), each either
+		// a line or {-1, 0, flag address, line}; a set flag moves the play time on by 0x800
+		uint16 ref = 0;
+		for (int guard = 0; guard < 64; guard++) {
+			uint16 si = dsWord(0xA9C5 + (((dsWord(0x86FD) & 0x1FFF) >> 8) & 0xFFFC));
+			if (dsWord(si) == 0xFFFF) {
+				si += 8;
+				if (dsWord(dsWord(si - 4))) {
+					setDsWord(0x86FD, dsWord(0x86FD) + 0x800);
+					continue;
+				}
+			}
+			ref = dsWord(si);
+			break;
+		}
+		setDsWord(0xA9BD, ref);
+		setDsWord(0xA9AB, cx + 0x40);
+		setDsWord(0xA9AD, cy - 0x32);
+	}
+	// 05D2E would also walk Peter towards the click; the conversation holds him here
+	startConversation(0xA997, true);
+}
+
+void HookEngine::startScene(uint16 script) {
+	// 0985F: the script is {u16 tick, u16 command, operands}; one entry per frame at most
+	setDsWord(0xAC4C, 0);
+	setDsWord(0xAC48, 0);	// the original keeps its script pointer in channel B's descriptor
+	setDsWord(0xABF7, 0);
+	setDsWord(0xABFB, 0);
+	_scenePtr = script;
+	_sceneCounter = 0;
+	_modal = kModalScene;
+}
+
+void HookEngine::modalTick() {
+	if (_modal == kModalScene) {
+		sceneTick();
+		applyScroll();	// the retrace interrupt keeps scrolling
+		for (int r = 0; r < kRetracesPerTick; r++)
+			fadeStep();
+		return;
+	}
+	// 099D2: 65 frames with a frame delay of one retrace ([cs:3482] = 1): Peter rises 5 px and
+	// the view 2 px a frame (down to y = 16); 20 frames before the end the screen fades out
+	for (int r = 0; r < kRetracesPerTick && _modal == kModalFlyUp; r++) {
+		_player.actor.y -= 5;
+		if (_scrollY >= 0x10)
+			_scrollY -= 2;
+		if (_flyCounter == 0x14)
+			startFade(false, 1);
+		fadeStep();
+		if (--_flyCounter < 0)
+			_modal = kModalNone;
+	}
+}
+
+void HookEngine::sceneTick() {
+	// 098CE
+	uint16 p = _scenePtr;
+	if ((int16)dsWord(p) < 0) {
+		endScene();
+		return;
+	}
+	if (dsWord(p) == _sceneCounter) {
+		int16 cmd = (int16)dsWord(p + 2);
+		p += 4;
+		if (cmd < 0) {
+			endScene();
+			return;
+		}
+		switch (cmd) {	// cs:993C
+		case 0:		// ported: 9951. FADE_IN (the palette of DS:07B1, as cs:9950 is set)
+			startFade(true, 0);
+			break;
+		case 1:		// ported: 9958. FADE_OUT
+		case 4:
+			startFade(false, 0);
+			break;
+		case 2: {	// ported: 9961. SHOW n: object 1 = frame n of room bank +3C at (0x80, 0x11C)
+			Actor &a = slotActor(0x1494);
+			a.bank = kBankRoom0 + 2;	// bank variable 0308
+			a.frame = (int16)dsWord(p);
+			a.x = 0x80;
+			a.y = 0x11C;
+			a.depth = 0;
+			p += 2;
+			break;
+		}
+		case 3:		// ported: 9985. SAY {x, y (unused), u32 text ref}: bubble at (0xB0, view top + 0x28)
+			setDsWord(0xABB1, 0xB0);
+			setDsWord(0xABB3, _scrollY + 0x28);
+			setDsWord(0xAC44, dsWord(p + 4));
+			p += 8;
+			break;
+		default:
+			warning("Hook: unknown scene command %d", cmd);
+			endScene();
+			return;
+		}
+		_scenePtr = p;
+	}
+	_sceneCounter++;
+}
+
+void HookEngine::endScene() {
+	// 09903: Peter faces the viewer, no scripted walking, the picture (object 1) is gone
+	setDsWord(0xAC4C, 0);
+	setDsWord(0xAC48, 0);
+	_player.facing = 3;
+	setDsWord(kDsWalkThrough, 0);
+	slotActor(0x1494).frame = -1;
+	_modal = kModalNone;
+}
+
+void HookEngine::startFade(bool in, int al) {
+	// 00B98 / 00BEB: 32 steps of 1/32, or 10 steps of 3/32 when al = 0 outside the flashback.
+	// A fade-in starts from black (colours 0xDC..0xFF, the panel, keep theirs: cs:25F1 = 1).
+	bool fast = !_sceneFade && al == 0;
+	_fadeSteps = fast ? 10 : 32;
+	_fadeDelta = fast ? 3 : 1;
+	_fadeDir = in ? 1 : -1;
+	if (in)
+		for (int i = 0; i < 0xDC; i++)
+			_palLevel[i] = 0;
+	applyPalette();
+}
+
+void HookEngine::fadeStep() {
+	// 024DA / 02562, once per retrace: only colours 64..95 while cs:9950 is set
+	if (!_fadeDir)
+		return;
+	int lo = _sceneFade ? 0x40 : 0, hi = _sceneFade ? 0x60 : (_fadeDir > 0 ? 0xDC : 0x100);
+	if (_fadeSteps > 0) {
+		_fadeSteps--;
+		for (int i = lo; i < hi; i++)
+			_palLevel[i] = CLIP(_palLevel[i] + _fadeDir * _fadeDelta, 0, 32);
+	} else {
+		// 025C7: the end - the target values in the range
+		for (int i = lo; i < hi; i++)
+			_palLevel[i] = _fadeDir > 0 ? 32 : 0;
+		_fadeDir = 0;
+	}
+	applyPalette();
+}
+
+void HookEngine::applyPalette() {
+	byte pal[256 * 3];
+	for (int i = 0; i < 256 * 3; i++)
+		pal[i] = _basePalette[i] * _palLevel[i / 3] / 32;
+	g_system->getPaletteManager()->setPalette(pal, 0, 256);
 }
 
 void HookEngine::runHandler(uint16 address) {
@@ -476,6 +687,14 @@ void HookEngine::runHandler(uint16 address) {
 		}
 		return;
 	case 0x8C06:	// item 16: {FFFF, message} data, handled by useAlone (never reached)
+		return;
+	case 0x9ABA:	// item 23 in room 35, channel B idle: sequences 705F and 706F
+		if (_room.number() == 0x23 && !dsWord(0xAC48)) {
+			startSequence(0x705F);
+			startSequence(0x706F, true);
+		} else {
+			showMessage(0xADAA);
+		}
 		return;
 	case 0x8C18:	// item 36
 		setDsWord(0xCE9B, 1);
@@ -990,6 +1209,138 @@ void HookEngine::runHandler(uint16 address) {
 		_player.actor.bank = kBankPeter;
 		_player.actor.frame = 0x1D;
 		return;
+	// The finale (rooms 38-41)
+	case 0x97D6:	// SEQ 7283 (room 38: the flashback)
+		runCue(0x97E0, 0xAC3A);
+		return;
+	case 0x9630:	// SEQ 7775 (room 39)
+		runCue(0x963A, 0xAC3A);
+		return;
+	case 0x95FE:	// SEQ 7B6F (room 40)
+		runCue(0x9608, 0xAC3A);
+		return;
+	case 0x95D2:	// SEQ 7D59 (room 41)
+		runCue(0x95DC, 0xAC3A);
+		return;
+	case 0x94BA:	// SEQ 8463 (room 41: the fight moves left)
+		runCue(0x94C4, 0xAC3A);
+		return;
+	case 0x93A2:	// SEQ 8579 (room 41: ... and right)
+		runCue(0x93AC, 0xAC3A);
+		return;
+	case 0x9358:	// SEQ 858D (room 41: the end)
+		runCue(0x9362, 0xAC3A);
+		return;
+
+	case 0x9830:	// 7283 tick 0: scripted walking, Peter faces the middle
+		setDsWord(kDsWalkThrough, 1);
+		_player.facing = _player.actor.x <= 0xED ? 1 : 0;
+		return;
+	case 0x9818:	// 7283 tick 110: sound effect 6 (M5)
+		return;
+	case 0x984C:	// 7283 tick 160: item 28
+		addItem(0x1C);
+		return;
+	case 0x9852:	// 7283 tick 308: fade out, from now on colours 64..95 only
+		startFade(false, 1);
+		_sceneFade = true;
+		return;
+	case 0x985F:	// 7283 tick 326: the flashback scene script (DS:75EF)
+		startScene(0x75EF);
+		return;
+	case 0x99AB:	// 7283 tick 342: everything fades in again
+		_sceneFade = false;
+		startFade(true, 1);
+		return;
+	case 0x99BF:	// 7283 tick 426: Peter flies (room bank +42); no interrupt scrolling
+		setDsWord(0xAC2B, 1);
+		_player.actor.bank = kBankRoom0 + 3;
+		_player.actor.frame = 0;
+		return;
+	case 0x99D2:	// 7283 tick 436: up and away
+		_flyCounter = 0x40;
+		_modal = kModalFlyUp;
+		return;
+	case 0x9A55:	// 7283 tick 437: on to room 39 as Pan, sequence rewound
+		setDsWord(0x86F7, 0x27);
+		setDsWord(0x86F9, 0);
+		_roomCountdown = 1;
+		setDsWord(0xAC2B, 0);
+		_player.actor.bank = kBankPeter;
+		abortSequences();
+		rewindSequence(_seqDesc);
+		return;
+
+	case 0x9742:	// 7775 tick 28: scroll right to x = 0x80 (an unsigned count, as in the original)
+		_scrollRequest[0] = (uint16)(0x80 - _scrollX);
+		return;
+	case 0x974D:	// 7775 tick 42: graph of node 8, walk to node 9
+		_player.selectGraph(8);
+		setDsWord(kDsWalkThrough, 1);
+		setDsWord(0xABCB, 9);
+		return;
+	case 0x9735:	// 7775 tick 56
+		setDsWord(kDsWalkThrough, 0);
+		_player.actor.frame = 0x1D;
+		return;
+	case 0x972F:	// 7775 tick 192: item 3
+		addItem(3);
+		return;
+	case 0x96D1:	// 7775 tick 229: on to room 40 (flags 13, 14), sequence rewound
+		setDsWord(0x86F7, 0x28);
+		setDsWord(0x86F9, 0);
+		_roomCountdown = 1;
+		setDsWord(flag(13), 1);
+		setDsWord(flag(14), 1);
+		abortSequences();
+		rewindSequence(_seqDesc);
+		return;
+
+	case 0x961C:	// 7B6F tick 38: Peter's own sprites, talk to the first hotspot (pose kept)
+		_player.actor.bank = kBankPeter;
+		setDsWord(0xAC23, 4);
+		talkToHotspot(hotspotBase());
+		return;
+	case 0x95E4:	// 7D59 tick 0: Peter from the room bank, frame 4, talk to the first hotspot
+		_player.actor.bank = kBankRoom0 + 3;
+		_player.actor.frame = 4;
+		setDsWord(0xAC23, 4);
+		talkToHotspot(hotspotBase());
+		return;
+
+	// 8579 / 8463: the fight shoves objects 0, 5 and 6 and Peter 1..3 px per tick right / left
+	case 0x947D:
+	case 0x948E:
+	case 0x949F:
+	case 0x9595:
+	case 0x95A6:
+	case 0x95B7: {
+		int sign = address < 0x9500 ? 1 : -1;
+		int n = (address == 0x947D || address == 0x9595) ? 1 : (address == 0x948E || address == 0x95A6) ? 2 : 3;
+		slotActor(0x147E).x += sign * n;
+		slotActor(0x14EC).x += sign * n;
+		_player.actor.x += sign * 2;
+		slotActor(0x1502).x += sign * 2;
+		return;
+	}
+	case 0x9468:	// 8579 tick 14: scroll right, Hook's bubble (conversation 1) with it
+	case 0x9580: {	// 8463 tick 14: ... left
+		bool right = address == 0x9468;
+		_scrollRequest[right ? 0 : 1] = 0x40;
+		uint16 bubble = _room.word(0x84) + 0x16;
+		_room.setWord(bubble, _room.word(bubble) + (right ? 0x3C : -0x3C));
+		return;
+	}
+	case 0x9370:	// 858D tick 42
+		_player.actor.frame = 0x11;
+		return;
+	case 0x9377:	// 858D tick 96: the end. The original restarts at the title screen (000B2),
+		// which is not ported yet
+		debugC(1, kDebugScript, "the end");
+		abortSequences();
+		quitGame();
+		return;
+
 	case 0x9EC3:	// exercise done: flag 16 + 1, flag 26 - 1, graph of node 14
 		setDsWord(flag(16), dsWord(flag(16)) + 1);
 		if (dsWord(flag(26)))

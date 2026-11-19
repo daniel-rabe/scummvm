@@ -87,7 +87,7 @@ void HookEngine::syncSlotsFromDs() {
 	for (uint i = 0; i < _objects.size(); i++)
 		get(kDsObjectSlots + kSlotSize * i, _objects[i]);
 	for (int i = 0; i < 4; i++)
-		_scrollRequest[i] = (int16)dsWord(kDsScrollRequests + 2 * i);
+		_scrollRequest[i] = dsWord(kDsScrollRequests + 2 * i);	// unsigned counters
 }
 
 bool HookEngine::sequenceRunning() const {

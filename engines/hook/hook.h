@@ -42,9 +42,10 @@ namespace Hook {
 /**
  * Engine for Hook (Ocean / Shadow Software, 1992, DOS).
  *
- * Status: milestone M4 (game logic) in progress. Verbs, inventory, conversations, GIVE,
- * action sequences and the hand-ported routines of the pirate town (rooms 0-11) work; the
- * Neverland and finale routines (handlers.cpp, docs/logic-ledger.md) are still to come.
+ * Status: milestone M4 (game logic). Verbs, inventory, conversations, GIVE, action sequences
+ * and the hand-ported routines of all rooms (handlers.cpp, docs/logic-ledger.md) are in,
+ * including Tinkerbell's hints, the flashback and the finale. Sound (M5), saves (M6) and the
+ * title screen / credits are still to come.
  * Keys: arrows scroll, PgUp/PgDn change room. Console: room, scroll, peter, hotspots,
  * walk, res.
  */
@@ -151,6 +152,16 @@ private:
 	void rewindSequence(uint16 desc);
 	void stopPeter();
 	bool loadPeterBank(uint16 nameOff);
+	void talkToHotspot(uint16 hs);
+	bool tinkerHit(int canvasX, int canvasY) const;
+	void tinkerTalk(int canvasX, int canvasY);
+	void startScene(uint16 script);
+	void modalTick();
+	void sceneTick();
+	void endScene();
+	void startFade(bool in, int al);
+	void fadeStep();
+	void applyPalette();
 	// sequence.cpp: action sequences
 	void syncSlotsToDs();
 	void syncSlotsFromDs();
@@ -263,6 +274,25 @@ private:
 	int _scrollX = 0;
 	int _scrollY = 0;
 	bool _dirty = true;
+
+	// Modal loops that run inside a sequence callback in the original (the sequences stand still)
+	enum ModalType {
+		kModalNone,
+		kModalScene,	///< 0985F: the flashback scene script ([AC48] / [AC4C] reused)
+		kModalFlyUp		///< 099D2: Peter flies up out of the view (65 frames of one retrace)
+	};
+	ModalType _modal = kModalNone;
+	uint16 _scenePtr = 0;
+	uint16 _sceneCounter = 0;
+	int _flyCounter = 0;
+
+	// Palette fades (00B98 out / 00BEB in, stepped by the retrace interrupt, 024DA / 02562)
+	bool _sceneFade = false;		///< cs:9950: fades touch colours 64..95 only, speaker colour 3
+	byte _basePalette[256 * 3];		///< the room palette (DS:07B1)
+	int _palLevel[256];				///< 0..32 per colour
+	int _fadeDir = 0;				///< +1 in, -1 out, 0 idle
+	int _fadeSteps = 0;				///< cs:1B57
+	int _fadeDelta = 1;				///< cs:1B59
 };
 
 extern HookEngine *g_engine;

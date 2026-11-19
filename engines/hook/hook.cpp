@@ -165,9 +165,15 @@ bool HookEngine::loadGlobals() {
 bool HookEngine::enterRoom(uint number, uint entry) {
 	if (!_room.load(_res, number))
 		return false;
-	byte pal[256 * 3];
-	_room.getPalette(_res, pal);
-	g_system->getPaletteManager()->setPalette(pal, 0, 256);
+	// 0CB3E: no sequences on either channel, no edge-scroll lock (flag 34)
+	for (uint16 v : { 0xAC30, 0xAC48, 0xAC34, 0xAC4C, 0x86FB })
+		setDsWord(v, 0);
+	_room.getPalette(_res, _basePalette);
+	for (int i = 0; i < 256; i++)
+		_palLevel[i] = 32;
+	_fadeDir = 0;
+	applyPalette();
+	_modal = kModalNone;
 
 	_objects.clear();
 	for (const RoomObject &o : _room.objects()) {
@@ -276,6 +282,18 @@ void HookEngine::handleEvent(const Common::Event &e) {
 
 void HookEngine::tick() {
 	updateDepths();	// 06A78 ran after the previous frame was drawn
+	if (_modal != kModalNone) {
+		// a modal loop inside a sequence callback: no input, no animation, no sequences
+		modalTick();
+		_clickLeft = _clickRight = false;
+		_dirty = true;
+		return;
+	}
+	// 32-bit play time [86FD] (saved; it also picks Tinkerbell's hint)
+	uint16 t = dsWord(0x86FD) + 1;
+	setDsWord(0x86FD, t);
+	if (!t)
+		setDsWord(0x86FF, dsWord(0x86FF) + 1);
 	_anim.tick(_room, _objects);
 
 	// 053EA: depth factor, hotspot under the mouse, edge scrolling, exit zones
@@ -338,6 +356,13 @@ void HookEngine::tick() {
 			}
 			_clickLeft = _clickRight = false;
 		}
+		if (_room.number() >= 0x27) {
+			// 0C398: from room 39 on there are no verbs, no inventory and no walking
+			_verb = _prevVerb = 0;
+			_itemSelected = false;
+			_itemX = 0;
+			_clickLeft = _clickRight = false;
+		}
 		if (_speechTotal == 0 && _roomCountdown <= 0) {
 			if (_clickRight)
 				rightClick();
@@ -354,6 +379,8 @@ void HookEngine::tick() {
 	tinkerTick();
 
 	applyScroll();
+	for (int r = 0; r < kRetracesPerTick; r++)
+		fadeStep();
 	_dirty = true;
 }
 
@@ -375,7 +402,8 @@ void HookEngine::edgeScroll() {
 
 void HookEngine::applyScroll() {
 	// 03525 runs from the retrace interrupt: one pixel per retrace while a request lasts
-	if (_room.number() == 0x29)
+	// (not in room 41, nor while [AC2B] is set: Peter flying up drives the scroll himself)
+	if (_room.number() == 0x29 || (dsWord(0xAC2B) & 0xFF))
 		return;
 	int maxX = _room.sword(0x1C) - kScreenWidth, maxY = (int)_room.sceneHeight() - kViewHeight;
 	for (int r = 0; r < kRetracesPerTick; r++) {
@@ -492,7 +520,11 @@ void HookEngine::clickView(int cx, int cy) {
 		return;
 	}
 	case kVerbTalk: {
-		// 05B1C (conversations themselves: M4)
+		// 05B1C: Tinkerbell first (not in room 37), then the hotspot's conversation
+		if (_room.number() != 0x25 && tinkerHit(cx, cy)) {
+			tinkerTalk(cx, cy);
+			return;
+		}
 		if (!hs)
 			return;
 		uint16 talk = dsWord(hs + kHsTalk);
@@ -611,9 +643,7 @@ void HookEngine::dispatchPending() {
 		startGive(arg);
 		break;
 	case kPendingTalk:
-		// 07B35: conversation t of the room: struct = header +84 + 2 + (t - 1) * 24
-		_player.facing = dsWord(arg + kHsFacing) & 3;
-		startConversation(_room.word(0x84) + 2 + 24 * (dsWord(arg + kHsTalk) - 1), false);
+		talkToHotspot(arg);
 		break;
 	case kPendingRefusal: {
 		uint16 msg = dsWord(kDsRefusals + 4 * (arg - 1));
@@ -745,10 +775,11 @@ void HookEngine::drawSpeech(const Common::Rect &view) {
 		ref = _speech[_speechPart];
 	if (ref)
 		drawSpeechLines(view, _lang.lines(ref), _player.actor.x, _player.actor.y, _speechColour, true);
-	// 06B7B: another character's line, [AC44] at [ABB1]/[ABB3], speaker colour 2
+	// 06B7B: another character's line, [AC44] at [ABB1]/[ABB3], speaker colour 2 (3 in the
+	// flashback, cs:9950)
 	if (dsWord(0xAC44))
 		drawSpeechLines(view, _lang.lines(dsWord(0xAC44)), (int16)dsWord(0xABB1), (int16)dsWord(0xABB3),
-						_res.image()[0x6E5C + 2], false);
+						_res.image()[0x6E5C + (_sceneFade ? 3 : 2)], false);
 }
 
 void HookEngine::drawSpeechLines(const Common::Rect &view, const Common::Array<Common::String> &lines, int ax, int bx,
@@ -915,7 +946,8 @@ Common::Error HookEngine::dumpFrames(const Common::Path &dir) {
 	auto write = [&](const Common::String &name) {
 		drawScreen();
 		byte pal[256 * 3];
-		_room.getPalette(_res, pal);
+		for (int i = 0; i < 256 * 3; i++)
+			pal[i] = _basePalette[i] * _palLevel[i / 3] / 32;
 		Common::DumpFile out;
 		Common::Path path = dir.appendComponent(name);
 		if (!out.open(path) || !Image::writePNG(out, *_screen->surfacePtr(), pal))
@@ -951,21 +983,21 @@ Common::Error HookEngine::dumpFrames(const Common::Path &dir) {
 			Common::String c = tok.nextToken();
 			int x = 0, y = 0, verb = 0;
 			sscanf(c.c_str(), "%d,%d,%d", &x, &y, &verb);
-			if (verb && verb != 9)
+			if (verb && verb < 8)
 				_verb = kVerbLatched | verb;
 			_mouse = Common::Point(x, y);
 			tick();
 			if (verb == 9)
 				_clickRight = true;	// "x,y,9" = right-click
-			else
-				_clickLeft = true;
+			else if (verb != 8)
+				_clickLeft = true;	// "x,y,8" = no click
 			for (int t = 0; t < ticks; t++)
 				tick();
 			_dirty = true;
 			write(Common::String::format("step%02d.png", step++));
-			debug("step %d: room %u Peter %d,%d frame %d facing %d scroll %d,%d speech %d", step,
+			debug("step %d: room %u Peter %d,%d frame %d facing %d scroll %d,%d speech %d tink %d,%d", step,
 				  _room.number(), _player.actor.x, _player.actor.y, _player.actor.frame, _player.facing,
-				  _scrollX, _scrollY, (int)_speech.size());
+				  _scrollX, _scrollY, (int)_speech.size(), _actors[1].x, _actors[1].y);
 		}
 		return Common::kNoError;
 	}
