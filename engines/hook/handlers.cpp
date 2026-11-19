@@ -133,9 +133,242 @@ void HookEngine::roomHookTick() {
 			setDsWord(0x8FE5 + 8, 0xFFFF);
 		}
 		break;
+	case 12:	// ported: B121. Flag 31 counts down, then edge scrolling is back (flag 34)
+		if (dsWord(flag(31))) {
+			setDsWord(flag(31), dsWord(flag(31)) - 1);
+			if (!dsWord(flag(31)))
+				setDsWord(flag(34), 0);
+		}
+		break;
+	case 29: {	// ported: B146. Fixed depths; Tinkerbell's cage (sequence 64C5) from node 6
+		static const int16 depths[] = { 0x7F, 0x80, 0, 1, 2, 3 };
+		for (int i = 0; i < 6; i++)
+			slotActor(kDsObjectSlots + kSlotSize * i).depth = depths[i];
+		if (dsWord(flag(9))) {
+			const byte *d = _room.data().data();
+			_room.setWord(READ_LE_UINT32(d + READ_LE_UINT32(d + 0x08)) + 0x54, 0x0C);
+			uint16 hs = hotspotBase() + 0x60;
+			setDsWord(hs + 4, 0);
+			setDsWord(hs + 0x12, 0x0C);
+			break;
+		}
+		if (sequenceRunning())
+			break;
+		const SpriteBank *b = bankFor(_player.actor.bank);
+		const Frame *f = b ? b->frame(_player.actor.frame) : nullptr;
+		uint16 n = _player.graph().nearest(_player.actor.x, _player.actor.y + (f ? f->height : 0));
+		setDsWord(0xAC29, n);
+		if (n == 6 && !_player.isWalking())
+			startSequence(0x64C5);
+		break;
+	}
+	case 30:	// ported: B1CF
+		slotActor(0x14D6).depth = 0x72;
+		slotActor(0x159C).depth = 0x74;
+		break;
+	case 31:	// ported: B1E0
+		slotActor(0x14AA).depth = 0x64;
+		slotActor(0x14C0).depth = 0xC8;
+		break;
+	case 33:	// ported: B1F2. Flags 20, 22, 24 remember items 26, 34, 29
+		if (hasItem(0x1A))
+			setDsWord(flag(20), 1);
+		if (hasItem(0x22))
+			setDsWord(flag(22), 1);
+		if (hasItem(0x1D))
+			setDsWord(flag(24), 1);
+		break;
+	case 34:	// ported: B21D
+		slotActor(0x1494).depth = 0xC8;
+		slotActor(0x14AA).depth = 0xC8;
+		break;
+	case 35:	// ported: B22E
+		slotActor(0x147E).depth = 0x74;
+		slotActor(0x1494).depth = 0x70;
+		slotActor(0x14AA).depth = 0x72;
+		if (hasItem(0x1E))
+			setDsWord(flag(23), 1);
+		break;
+	case 37:	// ported: B256. With the thimble (item 25) and flags 20, 21, 15: sequence 6CF3
+		slotActor(0x14AA).depth = 0x80;
+		if (!hasItem(0x19))
+			break;
+		setDsWord(flag(19), 1);
+		if (!dsWord(flag(20)) || !dsWord(flag(21)) || !dsWord(flag(15)) || sequenceRunning() ||
+			_player.graph().base() != 0)
+			break;
+		{
+			uint16 n = _player.graph().nearest(_player.actor.x, _player.actor.y);
+			setDsWord(0xAC29, n);
+			if (n == (_player.isWalking() ? 5u : 4u))
+				startSequence(0x6CF3);
+		}
+		break;
 	default:
 		break;
 	}
+}
+
+uint16 HookEngine::hotspotBase() const {
+	// [0E9E]: the current room's hotspot records in the data segment
+	return dsWord(0x1962 + 4 * _room.number());
+}
+
+void HookEngine::roomEntryHook() {
+	// 0ACBB: per-room code once the room is set up (cs:ACDA). The ambient sound calls
+	// (0AFF0 / 0B001 / 0B034) belong to M5.
+	switch (_room.number()) {
+	case 0:		// ported: AD82. The hat comes back to the passer-by's script switch
+		if (dsWord(flag(4)) == 2)
+			setDsWord(flag(4), 1);
+		break;
+	case 10: {	// ported: ADE0. Hotspot records and two objects depend on the costume (flag 0)
+		uint16 src = dsWord(flag(0)) ? 0xAA41 : 0xAA25;
+		for (int i = 0; i < 12; i++)
+			setDsWord(0x95CD + 2 * i, dsWord(src + 2 * i));
+		slotActor(0x1518).frame = (int16)dsWord(src + 24);
+		slotActor(0x152E).frame = (int16)dsWord(src + 26);
+		if (_player.graph().end() == 0x0A) {
+			// link 1 of local node 2 in Peter's graph; without the costume the original
+			// writes the 0 into the data segment instead of the room (kept as is)
+			const byte *d = _room.data().data();
+			uint16 links = READ_LE_UINT32(d + READ_LE_UINT32(d + 0x08));
+			if (dsWord(flag(0)))
+				_room.setWord(links + 0x12, 3);
+			else
+				setDsWord(links + 0x12, 0);
+		}
+		break;
+	}
+	case 11:	// ported: AE50. Tinkerbell gone, Peter's own sprites again
+		setDsWord(0x8739, 0);
+		loadPeterBank(0x2B2);	// PANSPRIT.BIN
+		break;
+	case 12:	// ported: AE7D
+		if (hasItem(0x17))
+			setDsWord(hotspotBase() + 0x18 + 0x10, 0);
+		break;
+	case 29:	// ported: AEA2. Tinkerbell freed: the cage is gone
+		if (dsWord(flag(9)))
+			for (int i = 0; i < 4; i++)
+				slotActor(0x14AA + kSlotSize * i).frame = -1;
+		break;
+	case 30:	// ported: AEC5
+		if (dsWord(flag(15))) {
+			static const int16 frames[] = { 0x19, 0x1A, 0x19 };
+			for (int i = 0; i < 3; i++) {
+				Actor &a = slotActor(0x155A + kSlotSize * i);
+				a.frame = frames[i];
+				a.y = 0x4B;
+			}
+			setDsWord(hotspotBase() + 0x108 + 4, 3);
+		}
+		break;
+	case 31:	// ported: AF01. The elastic between the trees
+		slotActor(0x14AA).frame = dsWord(flag(18)) ? 2 : 0;
+		slotActor(0x14C0).frame = dsWord(flag(18)) ? 3 : 1;
+		break;
+	case 32:	// ported: AF2A. Arriving by catapult
+		if (dsWord(flag(13))) {
+			startSequence(0x6DD7);
+			setDsWord(kDsCounterA, 0);
+			setDsWord(flag(13), 0);
+		}
+		break;
+	case 33:	// ported: AF45
+		if (dsWord(flag(27))) {
+			slotActor(0x1502).frame = -1;
+			Actor &a = slotActor(0x14EC);
+			a.frame = dsWord(flag(20)) ? -1 : 2;
+			a.x = 0x10D;
+			a.y = 0x69;
+		}
+		break;
+	case 37:	// ported: AF76
+		if (hasItem(0x19)) {
+			uint16 hs = hotspotBase() + 0x18;
+			setDsWord(hs + 4, 0);
+			setDsWord(hs + 0x14, 0);
+		} else {
+			setTinkerTarget(0xF8, 0x54, true);
+		}
+		break;
+	case 38:	// ported: AFBD
+		setTinkerTarget(0x10C, 0x12E, true);
+		setDsWord(kDsWalkThrough, 0);
+		break;
+	default:
+		break;
+	}
+}
+
+void HookEngine::setTinkerTarget(int x, int y, bool jump) {
+	// Tinkerbell flies towards the words that [41C7]/[41CB] point at; DS:0D7C/0D7E hold a
+	// fixed target. `jump` also puts her there ([18C6]/[18C8]) and shows her ([8739]).
+	if (jump) {
+		setDsWord(0x18C6, x);
+		setDsWord(0x18C8, y);
+		setDsWord(0x8739, 1);
+	}
+	setDsWord(0x0D7C, x);
+	setDsWord(0x0D7E, y);
+	setDsWord(0x41C7, 0x0D7C);
+	setDsWord(0x41CB, 0x0D7E);
+}
+
+void HookEngine::tinkerTick() {
+	// 068E8: Tinkerbell (actors 1..5: her and her trail) - hidden unless [8739]
+	if (!dsWord(0x8739)) {
+		for (int i = 1; i < 6; i++)
+			_actors[i].frame = -1;
+		return;
+	}
+	syncSlotsToDs();	// the target pointers may point at Peter's slot (1400/1404)
+	uint16 phase = (dsWord(0x1834) + 1) & 0x1F;
+	setDsWord(0x1834, phase);
+	int tx = (int16)dsWord(dsWord(0x41C7)), ty = (int16)dsWord(dsWord(0x41CB));
+	int x = (int16)dsWord(0x18C6), y = (int16)dsWord(0x18C8);
+	// 06916: x moves 4 px when more than 8 px off; y moves 2 px up, or down until close
+	if (x - 8 > tx) {
+		if (x - 16 >= tx)
+			x -= 4;
+	} else if (x - 8 < tx) {
+		if (x <= tx)
+			x += 4;
+	}
+	for (int guard = 0; guard < 1000 && y + 10 != ty; guard++) {
+		if (y + 10 > ty) {
+			if (y + 6 >= ty)
+				y -= 2;
+			break;
+		}
+		if (y + 14 > ty)
+			break;
+		y += 2;
+	}
+	setDsWord(0x18C6, x);
+	setDsWord(0x18C8, y);
+	for (int i = 1; i < 6; i++) {
+		_actors[i].x = x - 10;
+		_actors[i].y = y + 10 + 2 * (i - 1);
+	}
+	// 06A25 / 06A55: wobble from the tables at 183E (x) and 1886 (y), each trail sprite a
+	// step behind ([8737] = y only)
+	int a = 2 * phase;
+	for (int i = 1; i < 6; i++, a -= 2) {
+		if (!dsWord(0x8737))
+			_actors[i].x += (int16)dsWord(0x183E + a);
+		_actors[i].y += (int16)dsWord(0x1886 + a);
+	}
+	// 069C3: in front of Peter
+	int depth = _player.depth() ? _room.sword(0x1E) - _room.sword(0x24) + 0x10 : _player.actor.depth;
+	for (int i = 1; i < 6; i++)
+		_actors[i].depth = depth + 6 - (i - 1);
+	// 069FB: frames 2k + (counter & 1)
+	uint16 blink = dsWord(0x1832) + 1;
+	setDsWord(0x1832, blink);
+	for (int i = 1; i < 6; i++)
+		_actors[i].frame = 2 * (i - 1) + (blink & 1);
 }
 
 void HookEngine::runHandler(uint16 address) {
@@ -606,6 +839,162 @@ void HookEngine::runHandler(uint16 address) {
 		setDsWord(0x41CB, 0x0D7E);	// sic: [41C7] is left as it was
 		setDsWord(0x41CF, 0x1408);
 		setDsWord(0x8737, 0);
+		return;
+
+	// Neverland (rooms 12-34): sequence callbacks are all cue tables
+	case 0x9AE9:	// SEQ 6ABD (room 31: the catapult)
+		runCue(0x9AF3, 0xAC3A);
+		return;
+	case 0x9B6E:	// SEQ 6C3F (room 33: the pan-pipes)
+		runCue(0x9B78, 0xAC3A);
+		return;
+	case 0x9BEE:	// SEQ 6CF3 (room 37)
+		runCue(0x9BF8, 0xAC3A);
+		return;
+	case 0x9C9B:	// SEQ 6E47 (room 30)
+		runCue(0x9CA5, 0xAC3A);
+		return;
+	case 0x9D06:	// SEQ 6DD7 (room 32: landing)
+		runCue(0x9D10, 0xAC3A);
+		return;
+	case 0x9D24:	// SEQ 706F (room 35)
+		runCue(0x9D2E, 0xAC3A);
+		return;
+	case 0x9DA5:	// SEQ 67D7 (room 34: the tree stump)
+		runCue(0x9DAF, 0xAC3A);
+		return;
+	case 0x9DE9:	// SEQ 68C5 (room 34: the bike)
+		runCue(0x9DF3, 0xAC3A);
+		return;
+	case 0x9E39:	// SEQ 6725 (room 34: the weights)
+		runCue(0x9E43, 0xAC3A);
+		return;
+	case 0x9E71:	// SEQ 705F (room 35), second cue runner
+		runCue(0x9E7B, 0xAC3E);
+		return;
+	case 0x9EA5:	// SEQ 6A09 (room 32)
+		runCue(0x9EAF, 0xAC3A);
+		return;
+
+	case 0x9B01:	// 6ABD tick 78: catapulted to room 32 (flags 13, 14), sequence rewound
+		setDsWord(0x86F7, 0x20);
+		setDsWord(0x86F9, 0);
+		_roomCountdown = 1;
+		_player.actor.bank = kBankPeter;
+		setDsWord(flag(13), 1);
+		setDsWord(flag(14), 1);
+		abortSequences();
+		rewindSequence(_seqDesc);
+		return;
+	case 0x9B66:
+		_player.actor.bank = kBankRoom0 + 3;
+		return;
+	case 0x9B8C:	// 6C3F tick 14: the pipes are played - the bow (item 37) is gone
+		slotActor(0x1502).frame = -1;
+		removeItem(0x25);
+		return;
+	case 0x9B9A: {	// 6C3F tick 16
+		_player.actor.bank = kBankPeter;
+		showMessage(0xAD8C);
+		setDsWord(flag(27), 1);
+		uint16 hs = hotspotBase();
+		setDsWord(hs + 0x60 + 4, 0);
+		setDsWord(hs + 0x60 + 0x0A, 0xFFFF);
+		setDsWord(hs + 0xA8 + 4, 1);
+		setDsWord(dsWord(0x4020 + 4 * _room.number()) + 2 + 4, 1);	// object-state entry 1 visible
+		applyObjectState();
+		return;
+	}
+	case 0x9C0C:	// 6CF3 tick 20: Peter walks on his own (graph of node 9)
+		_player.actor.bank = kBankPeter;
+		_player.selectGraph(9);
+		setDsWord(kDsWalkThrough, 1);
+		_player.updateDepth(_room);
+		return;
+	case 0x9C94:	// 6CF3 tick 30: ... to node 13
+		setDsWord(0xABCB, 0x0D);
+		return;
+	case 0x9CC5:
+		_player.actor.bank = kBankPeter;
+		return;
+	case 0x9CC9: {
+		Actor &a = slotActor(0x155A);
+		a.frame = 0x19;
+		a.y = 0x4B;
+		return;
+	}
+	case 0x9CD7: {
+		Actor &a = slotActor(0x1586);
+		a.frame = 0x19;
+		a.y = 0x4B;
+		return;
+	}
+	case 0x9CE5: {	// 6E47 tick 54: flag 15
+		Actor &a = slotActor(0x1570);
+		a.frame = 0x1A;
+		a.y = 0x4B;
+		setDsWord(hotspotBase() + 0x108 + 4, 3);
+		setDsWord(flag(15), 1);
+		return;
+	}
+	case 0x9D3C:	// 706F tick 0: something to pick up appears (object-state entry 3)
+		if (dsWord(flag(23)) || hasItem(0x1E))
+			return;
+		setDsWord(hotspotBase() + 8, 3);
+		setDsWord(hotspotBase() + 4, 0x0A);
+		setDsWord(dsWord(0x4020 + 4 * _room.number()) + 0x22 + 4, 1);
+		applyObjectState();
+		return;
+	case 0x9D74:	// 706F tick 116: ... and goes again unless taken
+		if (hasItem(0x1E))
+			return;
+		setDsWord(hotspotBase() + 8, 0xFFFF);
+		setDsWord(hotspotBase() + 4, 5);
+		setDsWord(dsWord(0x4020 + 4 * _room.number()) + 0x22 + 4, 0);
+		applyObjectState();
+		return;
+	case 0x9DBD:	// Peter on the tree stump (room bank), object 5 hidden
+		_player.actor.bank = kBankRoom0 + 3;
+		slotActor(0x14EC).frame = -1;
+		_player.actor.x = 0x108;
+		_player.actor.y = 0x47;
+		return;
+	case 0x9DD9:
+		_player.actor.bank = kBankPeter;
+		slotActor(0x14EC).frame = 2;
+		return;
+	case 0x9E01:	// Peter on the bike
+		_player.actor.bank = kBankRoom0 + 3;
+		_player.actor.x = 0xBD;
+		_player.actor.y = 0x44;
+		slotActor(0x14D6).frame = -1;
+		return;
+	case 0x9E1D:	// (the original also writes [13F2] = B2, the renderer's scratch: no effect)
+		_player.actor.bank = kBankPeter;
+		slotActor(0x14D6).frame = 1;
+		_player.actor.y = 0x47;
+		return;
+	case 0x9E51:	// Peter at the weights
+		_player.actor.bank = kBankRoom0 + 3;
+		slotActor(0x14C0).frame = -1;
+		return;
+	case 0x9E61:
+		_player.actor.bank = kBankPeter;
+		slotActor(0x14C0).frame = 0;
+		return;
+	case 0x9E89:
+		_player.actor.bank = kBankRoom0 + 3;
+		_player.actor.frame = 0;
+		return;
+	case 0x9E97:
+		_player.actor.bank = kBankPeter;
+		_player.actor.frame = 0x1D;
+		return;
+	case 0x9EC3:	// exercise done: flag 16 + 1, flag 26 - 1, graph of node 14
+		setDsWord(flag(16), dsWord(flag(16)) + 1);
+		if (dsWord(flag(26)))
+			setDsWord(flag(26), dsWord(flag(26)) - 1);
+		_player.selectGraph(0x0E);
 		return;
 
 	default:

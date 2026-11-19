@@ -61,6 +61,7 @@ void HookEngine::syncSlotsToDs() {
 		setDsWord(slot + 0x04, (uint16)a.frame);
 		setDsWord(slot + 0x06, (uint16)a.x);
 		setDsWord(slot + 0x0A, (uint16)a.y);
+		setDsWord(slot + 0x0E, (uint16)a.depth);
 	};
 	put(kDsActorSlots, _player.actor);
 	for (int i = 1; i < 6; i++)
@@ -78,6 +79,7 @@ void HookEngine::syncSlotsFromDs() {
 		a.frame = (int16)dsWord(slot + 0x04);
 		a.x = (int16)dsWord(slot + 0x06);
 		a.y = (int16)dsWord(slot + 0x0A);
+		a.depth = (int16)dsWord(slot + 0x0E);
 	};
 	get(kDsActorSlots, _player.actor);
 	for (int i = 1; i < 6; i++)
@@ -128,22 +130,13 @@ void HookEngine::runSequence(uint16 &desc, uint16 &counter) {
 	uint16 p = desc + 6;
 	if (tick == length) {
 		// end: rewind every track so the sequence can be played again
-		setDsWord(desc + 2, 0);
-		for (uint i = 0; i < n; i++) {
-			if (dsWord(p) == 0xFFFF) {
-				p += 6;
-				continue;
-			}
-			uint16 track = dsWord(p);
-			setDsWord(track + 0x0A, 0);
-			setDsWord(track, dsWord(track + 4));
-			p += 4;
-		}
+		rewindSequence(desc);
 		desc = 0;
 		counter = 0;
 		return;
 	}
 	_seqCounter = counter;
+	_seqDesc = desc;
 	for (uint i = 0; i < n; i++) {
 		if (dsWord(p) == 0xFFFF) {
 			uint16 code = dsWord(p + 2);
@@ -159,6 +152,22 @@ void HookEngine::runSequence(uint16 &desc, uint16 &counter) {
 		}
 	}
 	counter++;
+}
+
+void HookEngine::rewindSequence(uint16 desc) {
+	// 08975: descriptor tick 0, every track's cursor back to its start, waits cleared
+	setDsWord(desc + 2, 0);
+	uint16 p = desc + 6;
+	for (uint i = 0; i < dsWord(desc); i++) {
+		if (dsWord(p) == 0xFFFF) {
+			p += 6;
+			continue;
+		}
+		uint16 track = dsWord(p);
+		setDsWord(track + 0x0A, 0);
+		setDsWord(track, dsWord(track + 4));
+		p += 4;
+	}
 }
 
 void HookEngine::trackStep(uint16 track) {

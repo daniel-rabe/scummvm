@@ -180,6 +180,7 @@ bool HookEngine::enterRoom(uint number, uint entry) {
 	}
 	applyObjectState();
 	_anim.start(_room);
+	updateDepths();
 
 	_pending = kPendingNone;
 	_speech.clear();
@@ -208,6 +209,8 @@ bool HookEngine::enterRoom(uint number, uint entry) {
 	_dirty = true;
 	debugC(1, kDebugScript, "Room %u entry %u: Peter %d,%d, scroll %d,%d", number, entry,
 		   _player.actor.x, _player.actor.y, _scrollX, _scrollY);
+	updateDepths();
+	roomEntryHook();	// 0CB3B -> 0ACBB
 	return true;
 }
 
@@ -272,6 +275,7 @@ void HookEngine::handleEvent(const Common::Event &e) {
 }
 
 void HookEngine::tick() {
+	updateDepths();	// 06A78 ran after the previous frame was drawn
 	_anim.tick(_room, _objects);
 
 	// 053EA: depth factor, hotspot under the mouse, edge scrolling, exit zones
@@ -313,7 +317,7 @@ void HookEngine::tick() {
 		_clickLeft = _clickRight = false;
 	} else if (sequenceRunning() && !dsWord(0xABC9)) {
 		// 055A0: channel A drives the scene; no input, Peter is moved by the sequence
-		// (unless [ABC9] lets Peter walk while it runs)
+		// (unless [ABC9]: scripted walking, see below)
 		_clickLeft = _clickRight = false;
 	} else if (_giveTimer > 0) {
 		// 055C1: holding the item out, then the GIVE logic
@@ -323,6 +327,17 @@ void HookEngine::tick() {
 	} else {
 		if (_lookEvent)
 			lookEventTick();
+		if (dsWord(0xABC9)) {
+			// 0547F: scripted walking - no mouse input; [ABCB] = n sends Peter to node n of
+			// the room's first walk graph (05D32)
+			if (uint16 n = dsWord(0xABCB)) {
+				setDsWord(0xABCB, 0);
+				const byte *d = _room.data().data();
+				uint32 nodes = READ_LE_UINT32(d + READ_LE_UINT32(d + 0x0C));
+				_player.walkTo(_room.sword(nodes + 4 * (n - 1)), _room.sword(nodes + 4 * (n - 1) + 2));
+			}
+			_clickLeft = _clickRight = false;
+		}
 		if (_speechTotal == 0 && _roomCountdown <= 0) {
 			if (_clickRight)
 				rightClick();
@@ -336,10 +351,7 @@ void HookEngine::tick() {
 
 	sequencesTick();
 	roomHookTick();
-	// 068E8: Tinkerbell's trail only shows while she follows Peter ([8739])
-	if (!dsWord(0x8739))
-		for (int i = 1; i < 6; i++)
-			_actors[i].frame = -1;
+	tinkerTick();
 
 	applyScroll();
 	_dirty = true;
@@ -673,6 +685,21 @@ void HookEngine::drawScreen() {
 	_dirty = false;
 }
 
+void HookEngine::updateDepths() {
+	// 06A78: depth = y + frame height + dy for every visible slot
+	auto upd = [&](Actor &a) {
+		const SpriteBank *b = bankFor(a.bank);
+		const Frame *f = (b && a.frame >= 0) ? b->frame(a.frame) : nullptr;
+		if (f)
+			a.depth = a.y + f->height + f->dy;
+	};
+	upd(_player.actor);
+	for (int i = 1; i < 6; i++)
+		upd(_actors[i]);
+	for (Actor &a : _objects)
+		upd(a);
+}
+
 void HookEngine::drawView() {
 	Common::Rect view(0, 0, kScreenWidth, kViewHeight);
 	_screen->fillRect(view, 0);
@@ -681,8 +708,9 @@ void HookEngine::drawView() {
 	for (int y = 0; y < h; y++)
 		memcpy(_screen->getBasePtr(0, y), _room.canvas() + (_scrollY + y) * _room.width() + _scrollX, w);
 
-	// Sprites in depth order (06A78 / 06AAC): depth = y + height + dy; ties keep slot order,
-	// actor 0 first.
+	// Sprites in depth order (06AAC): by the slot's stored depth (+0E), ties keep slot order,
+	// actor 0 first. The depth is recomputed after drawing (06A78, see updateDepths), so a
+	// room hook or a track can override it for the next frame.
 	struct Item {
 		const Actor *a;
 		const Frame *f;
@@ -702,8 +730,7 @@ void HookEngine::drawView() {
 	for (uint i = 0; i < _objects.size(); i++)
 		add(_objects[i], 6 + i, kObjectXOffset);
 	Common::sort(items.begin(), items.end(), [](const Item &p, const Item &q) {
-		int dp = p.a->y + p.f->height + p.f->dy, dq = q.a->y + q.f->height + q.f->dy;
-		return dp != dq ? dp < dq : p.order < q.order;
+		return p.a->depth != q.a->depth ? p.a->depth < q.a->depth : p.order < q.order;
 	});
 	Graphics::Surface &s = *_screen->surfacePtr();
 	for (const Item &it : items)

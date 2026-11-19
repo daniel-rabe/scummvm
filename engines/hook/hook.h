@@ -144,6 +144,11 @@ private:
 	Actor &slotActor(uint16 dsSlot);
 	void takeObjectState(uint16 k);
 	void roomHookTick();
+	void roomEntryHook();
+	uint16 hotspotBase() const;
+	void setTinkerTarget(int x, int y, bool jump);
+	void tinkerTick();
+	void rewindSequence(uint16 desc);
 	void stopPeter();
 	bool loadPeterBank(uint16 nameOff);
 	// sequence.cpp: action sequences
@@ -181,6 +186,7 @@ private:
 
 	void drawScreen();
 	void drawView();
+	void updateDepths();
 	void drawSpeech(const Common::Rect &view);
 	void drawSpeechLines(const Common::Rect &view, const Common::Array<Common::String> &lines, int ax, int bx,
 						 byte colour, bool peter);
@@ -225,6 +231,7 @@ private:
 	SpriteBank _tinkerBank;			///< TINKER.BIN
 	Actor _actors[6];				///< actors 1..5 (original DS:1410..); [0] unused, Peter is _player
 	uint16 _seqCounter = 0;			///< [AB79] counter of the channel being run
+	uint16 _seqDesc = 0;			///< [AB75] descriptor being run
 	bool _seqAbort = false;			///< a callback left the sequence runner (see sequencesTick)
 
 	bool _convActive = false;		///< [AC36] != 0
