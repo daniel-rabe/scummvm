@@ -56,6 +56,7 @@ static const uint16 kMsgUseWithItem = 0xADAA;
 static const uint16 kMsgLookFallback[3] = { 0xADBC, 0xADC2, 0xADB6 };	// [AC25] = 0, 1, 2
 static const uint16 kMsgTalkBusy = 0xADC8;		// talk = 0x8000
 static const uint16 kMsgTalkBusy2 = 0xADDA;		// talk = 0x800n
+static const uint16 kMsgGiveNotNow = 0xADCE;	// GIVE to something that cannot take it
 
 // Verbs ([0E60] low nibble)
 enum { kVerbLook = 1, kVerbTalk = 2, kVerbPickUp = 3, kVerbUse = 4, kVerbGive = 5 };
@@ -188,6 +189,11 @@ bool HookEngine::enterRoom(uint number, uint entry) {
 	_roomCountdown = 10;	// 0CABF: exits stay disabled for the first 10 ticks
 	_roomGuard = true;
 
+	setDsWord(0x86F7, number);
+	setDsWord(0x86F9, entry);
+	setDsWord(0xABF7, 0);
+	setDsWord(0xAC44, 0);
+	_convActive = false;
 	_player.enterRoom(_room, entry);
 	// 0CA5A: scroll x = Peter - 176, clamped to 16 .. header +1C - 320 (then floored at 15)
 	int sx = _player.actor.x - 0xB0;
@@ -281,7 +287,7 @@ void HookEngine::tick() {
 			_roomGuard = false;
 			_roomCountdown = -1;
 		} else {
-			enterRoom(_nextRoom, _nextEntry);
+			enterRoom(dsWord(0x86F7), dsWord(0x86F9));
 			_clickLeft = _clickRight = false;
 			return;
 		}
@@ -297,8 +303,17 @@ void HookEngine::tick() {
 		// 055AF: holding the pick-up pose
 		pickupTick();
 		_clickLeft = _clickRight = false;
+	} else if (_convActive) {
+		// 05469: a running conversation takes the input
+		conversationTick();
+		_clickLeft = _clickRight = false;
 	} else if (sequenceRunning()) {
 		// 055A0: channel A drives the scene; no input, Peter is moved by the sequence
+		_clickLeft = _clickRight = false;
+	} else if (_giveTimer > 0) {
+		// 055C1: holding the item out, then the GIVE logic
+		if (--_giveTimer == 0)
+			giveTick();
 		_clickLeft = _clickRight = false;
 	} else {
 		if (_lookEvent)
@@ -380,8 +395,8 @@ void HookEngine::checkExits() {
 		int x = _room.sword(e), y = _room.sword(e + 2);
 		if (x - 4 <= fx && y - 3 <= fy && x + 4 >= fx && y + 3 >= fy) {
 			_roomCountdown = 1;
-			_nextRoom = _room.sword(e + 4);
-			_nextEntry = _room.sword(e + 6);
+			setDsWord(0x86F7, _room.word(e + 4));
+			setDsWord(0x86F9, _room.word(e + 6));
 			return;
 		}
 	}
@@ -469,6 +484,13 @@ void HookEngine::clickView(int cx, int cy) {
 			setPending(kPendingMessage, kMsgTalkThat);
 		} else if ((talk & 0xFFF0) == 0x8000) {
 			setPending(kPendingMessage, (talk & 0xF) ? kMsgTalkBusy2 : kMsgTalkBusy);
+		} else {
+			// 05BB7: a conversation needs a walk node inside the active graph
+			int x, y;
+			if (_player.hotspotTarget(dsWord(hs + kHsWalkNode), x, y) == 1)
+				setPending(kPendingTalk, hs);
+			_player.walkTo(x, y);
+			return;
 		}
 		walkToHotspot(hs);
 		return;
@@ -492,19 +514,37 @@ void HookEngine::clickView(int cx, int cy) {
 		walkToHotspot(hs);
 		return;
 	}
-	case kVerbUse:
-		// 05C2F (USE logic: M4)
-		if (!hs) {
-			setPending(kPendingMessage, kMsgUseNothing);
+	case kVerbUse: {
+		// 05C2F
+		int16 use = hs ? (int16)dsWord(hs + kHsUse) : 0;
+		if (use == 0) {
+			setPending(kPendingMessage, _itemSelected ? kMsgUseWithItem : kMsgUseNothing);
 			_player.walkTo(_player.feetX(), _player.feetY());
 			return;
 		}
+		if (use < -1 || (use == -1 && (!dsWord(hs + kHsLook) || !dsWord(hs + kHsPickUp))))
+			return;
+		setPending(kPendingUse, hs);
 		walkToHotspot(hs);
 		return;
-	case kVerbGive:
-		if (hs)
+	}
+	case kVerbGive: {
+		// 05CA4
+		if (!_itemSelected)
+			return;
+		uint16 talk = hs ? dsWord(hs + kHsTalk) : 0;
+		if (hs && (talk >> 8) == 0x80) {
+			setPending(kPendingMessage, talk == 0x8000 ? kMsgTalkBusy : kMsgGiveNotNow);
 			walkToHotspot(hs);
+		} else if (talk == 0) {
+			setPending(kPendingMessage, kMsgGiveNotNow);
+			_player.walkTo(_player.feetX(), _player.feetY());
+		} else {
+			setPending(kPendingGive, hs);
+			walkToHotspot(hs);
+		}
 		return;
+	}
 	default:
 		// 05D1D: no verb - walk to the hotspot's node or to the clicked point
 		_pending = kPendingNone;
@@ -545,6 +585,17 @@ void HookEngine::dispatchPending() {
 		break;
 	case kPendingPickup:
 		startPickup(arg);
+		break;
+	case kPendingUse:
+		useOnHotspot(arg);
+		break;
+	case kPendingGive:
+		startGive(arg);
+		break;
+	case kPendingTalk:
+		// 07B35: conversation t of the room: struct = header +84 + 2 + (t - 1) * 24
+		_player.facing = dsWord(arg + kHsFacing) & 3;
+		startConversation(_room.word(0x84) + 2 + 24 * (dsWord(arg + kHsTalk) - 1), false);
 		break;
 	case kPendingRefusal: {
 		uint16 msg = dsWord(kDsRefusals + 4 * (arg - 1));
@@ -837,6 +888,11 @@ Common::Error HookEngine::dumpFrames(const Common::Path &dir) {
 	};
 	if (ConfMan.hasKey("dump_clicks")) {
 		enterRoom(ConfMan.hasKey("dump_room") ? ConfMan.getInt("dump_room") : 0, 0);
+		if (ConfMan.hasKey("dump_items")) {
+			Common::StringTokenizer items(ConfMan.get("dump_items"), ",");
+			while (!items.empty())
+				addItem(atoi(items.nextToken().c_str()));
+		}
 		if (ConfMan.hasKey("dump_seq"))
 			startSequence((uint16)strtol(ConfMan.get("dump_seq").c_str(), nullptr, 16));
 		Common::StringTokenizer tok(ConfMan.get("dump_clicks"), ";");
@@ -845,11 +901,14 @@ Common::Error HookEngine::dumpFrames(const Common::Path &dir) {
 			Common::String c = tok.nextToken();
 			int x = 0, y = 0, verb = 0;
 			sscanf(c.c_str(), "%d,%d,%d", &x, &y, &verb);
-			if (verb)
+			if (verb && verb != 9)
 				_verb = kVerbLatched | verb;
 			_mouse = Common::Point(x, y);
 			tick();
-			_clickLeft = true;
+			if (verb == 9)
+				_clickRight = true;	// "x,y,9" = right-click
+			else
+				_clickLeft = true;
 			for (int t = 0; t < ticks; t++)
 				tick();
 			_dirty = true;

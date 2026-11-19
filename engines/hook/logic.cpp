@@ -303,6 +303,174 @@ void HookEngine::itemLook(uint16 item) {
 		say(dsMessage(dsWord(kDsItemLook + 4 * (item - 1))), kFacingDown);
 }
 
+// USE / GIVE on hotspots (08CC8, 08DAE, 08EBD, 08EF0)
+static const uint16 kDsUseTable = 0xA91F;		// far ptrs per use - 1: code (segment 0) or item list
+static const uint16 kDsGiveTable = 0xAA5D;		// near ptrs per give - 1
+static const uint16 kDsGiveStruct = 0xAAF3;		// temporary conversation struct for the replies
+static const uint16 kMenuNoThanks = 0xAB0B;		// "No thanks. / I don't want it."
+static const uint16 kMenuThanks = 0xAB11;		// "Thanks."
+static const uint16 kMenuThereYouGo = 0xAB17;	// "There you go." / Peter: "Thanks."
+static const uint16 kMsgCantUse = 0xADAA;
+static const uint16 kMsgNeedSomething = 0xADB0;	// "I need to use something with ..."
+static const uint16 kMsgUseNoItem = 0xAD98;
+static const uint16 kMsgUseTakeable = 0xADA4;
+
+void HookEngine::useOnHotspot(uint16 hs) {
+	// 08CC8
+	_prevVerb = _verb;
+	_verb = 0;
+	int16 use = (int16)dsWord(hs + 0x0A);
+	if (_itemSelected) {
+		if (use == 0) {
+		} else if (use < 0) {
+			say(dsMessage(kMsgCantUse), kFacingDown);
+		} else {
+			useWithItem(hs);
+		}
+		_itemSelected = false;
+		_itemX = 0;
+		return;
+	}
+	if (use == 0)
+		return;
+	if (use < 0) {
+		int16 pick = (int16)dsWord(hs + 8);
+		say(dsMessage(pick > 0 ? kMsgUseTakeable : kMsgUseNoItem), kFacingDown);
+		return;
+	}
+	// 08D60: code, or an item list (which needs an item: "I need to use something with ...")
+	uint16 off = dsWord(kDsUseTable + 4 * (use - 1)), seg = dsWord(kDsUseTable + 4 * (use - 1) + 2);
+	if (seg != 0 && dsWord(off) == 0xFFFF)
+		say(dsMessage(kMsgNeedSomething), kFacingDown);
+	else
+		runHandler(off);
+}
+
+void HookEngine::useWithItem(uint16 hs) {
+	// 08DAE: the source hotspot's use picks the list; the hotspot at Peter's feet picks the
+	// entry (the same use number = entry 0, use = -(k + 2) = entry k)
+	int16 sourceUse = (int16)dsWord(hs + 0x0A);
+	uint16 at = hitTest(_player.feetX(), _player.feetY());
+	if (!at)
+		at = hs;
+	int16 targetUse = (int16)dsWord(at + 0x0A);
+	int k;
+	if (targetUse > 0 && targetUse == sourceUse)
+		k = 0;
+	else if (targetUse < -1)
+		k = -targetUse - 2;
+	else {
+		say(dsMessage(kMsgCantUse), kFacingDown);
+		return;
+	}
+	uint16 list = dsWord(kDsUseTable + 4 * (sourceUse - 1));
+	uint16 entry = list + 2 + 8 * k;
+	if (dsWord(entry) == selectedItem())
+		runHandler(dsWord(entry + 4));
+	else
+		say(dsMessage(kMsgCantUse), kFacingDown);
+}
+
+void HookEngine::startGive(uint16 hs) {
+	// 08EBD: Peter holds the item out for 8 ticks
+	_player.facing = dsWord(hs + 2) & 3;
+	_giveHotspot = hs;
+	_giveTimer = 8;
+	int f = _player.facing;
+	_player.actor.frame = f >= 2 ? f + 0x1C : (f ^ 1) + 0x2F;
+}
+
+void HookEngine::giveReply(uint16 menu) {
+	// 0909C: a temporary conversation in the data segment, speaking as the hotspot's character
+	uint16 talk = dsWord(_giveHotspot + 0x14);
+	uint16 src = _room.word(0x84) + 2 + 24 * (talk - 1);
+	setDsWord(kDsGiveStruct + 0x04, 0);
+	setDsWord(kDsGiveStruct + 0x06, 4);
+	for (uint16 f : { (uint16)0x0C, (uint16)0x10, (uint16)0x12, (uint16)0x14, (uint16)0x16 })
+		setDsWord(kDsGiveStruct + f, _room.word(src + f));
+	setDsWord(kDsGiveStruct, menu);
+	setDsWord(kDsGiveStruct + 8, menu);
+	startConversation(kDsGiveStruct, true);
+}
+
+void HookEngine::giveTick() {
+	// 08EF0
+	uint16 hs = _giveHotspot;
+	uint16 give = dsWord(hs + 0x0E);
+	uint16 item = selectedItem();
+	_itemSelected = false;
+	_itemX = 0;
+	_prevVerb = _verb;
+	_verb = 0;
+	if (!give) {
+		giveReply(kMenuNoThanks);
+		return;
+	}
+	uint16 list = dsWord(kDsGiveTable + 4 * (give - 1));
+	uint16 n = dsWord(list);
+	uint16 p = list + 2 + 2 * n;
+	int idx = -1;
+	for (uint16 i = 0; i < n; i++)
+		if (dsWord(list + 2 + 2 * i) == item)
+			idx = i;
+	if (idx < 0) {
+		giveReply(kMenuNoThanks);
+		return;
+	}
+	// skip to stream idx (each ends with FFF8)
+	for (int s = 0; s < idx; s++) {
+		while (dsWord(p) != 0xFFF8)
+			p += 2;
+		p += 2;
+	}
+	for (int guard = 0; guard < 64; guard++) {
+		int16 op = (int16)dsWord(p);
+		p += 2;
+		switch (op) {
+		case -8:
+			return;
+		case -1:	// 0900D take the item: "Thanks."
+			removeItem(item);
+			giveReply(kMenuThanks);
+			break;
+		case -2: {	// 0901B take it, give k items: "There you go."
+			removeItem(item);
+			uint16 k = dsWord(p);
+			p += 2;
+			for (uint16 i = 0; i < k; i++, p += 2)
+				addItem(dsWord(p));
+			giveReply(kMenuThereYouGo);
+			break;
+		}
+		case -3:	// 09045 word ++
+			setDsWord(dsWord(p), dsWord(dsWord(p)) + 1);
+			p += 4;
+			break;
+		case -4: {	// 0904E word -- (not below 0)
+			int16 v = (int16)dsWord(dsWord(p)) - 1;
+			setDsWord(dsWord(p), v < 0 ? 0 : v);
+			p += 4;
+			break;
+		}
+		case -5:	// 0905D refuse with a message if the word is set
+		case -6: {	// 0908E ... if it is clear
+			bool set = dsWord(dsWord(p)) != 0;
+			uint16 msg = dsWord(p + 4);
+			p += 8;
+			if ((op == -5) == set) {
+				if (msg != 0xFFFF)
+					giveReply(msg);
+				return;
+			}
+			break;
+		}
+		default:
+			warning("Hook: unknown GIVE command %d", op);
+			return;
+		}
+	}
+}
+
 void HookEngine::arrowTick() {
 	// 0716A: pressed arrows spring back after 2 ticks
 	if (_arrowTimer && ++_arrowTimer == 3) {

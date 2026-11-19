@@ -3,6 +3,7 @@ MODULE := engines/hook
 MODULE_OBJS = \
 	anim.o \
 	console.o \
+	conversation.o \
 	handlers.o \
 	hook.o \
 	logic.o \

@@ -93,8 +93,31 @@ private:
 		kPendingItemLook,	///< type 1: item description (DS:40C8)
 		kPendingRefusal,	///< type 2: PICK UP refusal via DS:4016
 		kPendingMessage,	///< type 4: message in the data segment
-		kPendingPickup		///< [ABDD]: take the object of a hotspot
+		kPendingPickup,		///< [ABDD]: take the object of a hotspot
+		kPendingTalk,		///< [ABF5]: start the hotspot's conversation
+		kPendingUse,		///< [ABC1]: USE (with or without the selected item)
+		kPendingGive		///< [ABE1]: GIVE the selected item
 	};
+
+	// logic.cpp: USE / GIVE on hotspots
+	void useOnHotspot(uint16 hs);
+	void useWithItem(uint16 hs);
+	void startGive(uint16 hs);
+	void giveTick();
+	void giveReply(uint16 menu);
+
+	// conversation.cpp
+	uint16 convWord(uint16 off) const;
+	void setConvWord(uint16 off, uint16 v);
+	int refTicks(uint16 ref) const;
+	void startConversation(uint16 structOff, bool inDs);
+	void setPeterLine(uint16 ref, int speaker);
+	void conversationTick();
+	uint16 optionText(uint16 option, uint16 &after, bool &visible) const;
+	void conversationMenu();
+	void conversationReply();
+	void npcSay(uint16 ref);
+	void npcTalkTick();
 
 	// logic.cpp: table-driven game logic
 	uint16 csWord(uint16 off) const;
@@ -195,6 +218,18 @@ private:
 	Actor _actors[6];				///< actors 1..5 (original DS:1410..); [0] unused, Peter is _player
 	uint16 _seqCounter = 0;			///< [AB79] counter of the channel being run
 
+	bool _convActive = false;		///< [AC36] != 0
+	bool _convInDs = false;			///< struct and menus in the data segment (GIVE replies)
+	uint16 _convStruct = 0;			///< [AC36]
+	bool _convReply = false;		///< [AE12]
+	int _convPeterTicks = 0;		///< [ABEB] while in a conversation
+	int _convNpcTicks = 0;			///< [AC1B]
+	int _convPause = 0;				///< [AE10]
+	int _npcTalkCounter = 0;		///< [3DD8] for the NPC
+	int _stockLine = 0;				///< [ABAD]
+	uint16 _giveHotspot = 0;		///< [AC27]
+	int _giveTimer = 0;				///< [ABF1]
+
 	Message _speech;				///< refs of the message being said
 	uint _speechPart = 0;
 	int _speechTicks = 0;			///< [ABD3] ticks left for the current part
@@ -203,7 +238,6 @@ private:
 
 	int _roomCountdown = 0;			///< [ABBF]: >0 counting, <0 idle
 	bool _roomGuard = false;		///< [AFA2]
-	int _nextRoom = 0, _nextEntry = 0;
 	int _scrollRequest[4] = { 0, 0, 0, 0 };	///< [AB93] right, [AB95] left, [AB97] up, [AB99] down
 
 	Common::Point _mouse;
