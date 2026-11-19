@@ -35,6 +35,9 @@ private:
 	bool cmdRoom(int argc, const char **argv);
 	bool cmdScroll(int argc, const char **argv);
 	bool cmdResources(int argc, const char **argv);
+	bool cmdPeter(int argc, const char **argv);
+	bool cmdHotspots(int argc, const char **argv);
+	bool cmdWalk(int argc, const char **argv);
 };
 
 } // End of namespace Hook

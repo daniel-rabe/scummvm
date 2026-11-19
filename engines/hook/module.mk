@@ -1,11 +1,13 @@
 MODULE := engines/hook
 
 MODULE_OBJS = \
+	anim.o \
 	console.o \
 	hook.o \
 	metaengine.o \
 	resources.o \
-	room.o
+	room.o \
+	sprites.o
 
 # This module can be built as a plugin
 ifeq ($(ENABLE_HOOK), DYNAMIC_PLUGIN)

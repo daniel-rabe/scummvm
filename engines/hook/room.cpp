@@ -34,8 +34,19 @@ static const uint16 kFixedMisc = 0x0745;
 static const uint16 kFixedPanel = 0x06E5;
 static const uint kFirstFixedColour = 0xBC;
 
+// DS:419D: one byte per room; bank +0x3C is remapped only where it is set (0CE3D).
+static const uint16 kRemapBank3CTable = 0x419D;
+
+// Header offsets of the four sprite banks: u16 paragraph + size.
+const uint16 Room::kBankHeader[Room::kNumBanks] = { 0x30, 0x36, 0x3C, 0x42 };
+
 uint16 Room::word(uint off) const {
 	return off + 2 <= _data.size() ? READ_LE_UINT16(_data.data() + off) : 0;
+}
+
+void Room::setWord(uint off, uint16 v) {
+	if (off + 2 <= _data.size())
+		WRITE_LE_UINT16(_data.data() + off, v);
 }
 
 bool Room::load(const Resources &res, uint number) {
@@ -49,10 +60,59 @@ bool Room::load(const Resources &res, uint number) {
 	_width = word(0x1A);
 	if (!_width || _canvasOffset >= _data.size())
 		return false;
-	// Some rooms store fewer than 200 rows; the canvas ends with the file.
-	_height = MIN<uint>(200, (_data.size() - _canvasOffset) / _width);
-	debugC(1, kDebugResources, "%s: canvas %ux%u", name.c_str(), _width, _height);
+	// The canvas runs to the end of the file (room 38: 372 rows; rooms 03/40 fewer than 200).
+	// Header +1E is the scene height, +16 the vertical scroll limit (scene height - 128);
+	// rows below the scene hold patch graphics for animations.
+	_height = (_data.size() - _canvasOffset) / _width;
+	_sceneHeight = MIN<uint>(word(0x1E) ? word(0x1E) : 128, _height);
+
+	// Sprite banks: +30/+36/+3C carry a u32 size, +42 a u16 size.
+	for (uint i = 0; i < kNumBanks; i++) {
+		uint16 h = kBankHeader[i];
+		_bankPara[i] = word(h);
+		uint32 start = _bankPara[i] * 16;
+		uint32 size = (h == 0x42) ? word(h + 2) : READ_LE_UINT32(_data.data() + h + 2);
+		const byte *xlat = res.ds(kXlatPeter);
+		if (h == 0x30 || (h == 0x3C && !res.ds(kRemapBank3CTable)[number]))
+			xlat = nullptr;
+		if (start < _data.size())
+			_banks[i].load(_data.data() + start, MIN<uint32>(size, _data.size() - start), xlat);
+		else
+			_banks[i].clear();
+	}
+
+	_objects.clear();
+	uint16 objBase = word(0x4C);
+	for (uint i = 0; i < word(0x4A); i++) {
+		uint off = objBase + 22 * i;
+		RoomObject o;
+		o.bankPara = word(off + 0x02);
+		o.frame = sword(off + 0x04);
+		o.x = sword(off + 0x06);
+		o.y = sword(off + 0x0A);
+		o.layer = word(off + 0x14);
+		_objects.push_back(o);
+	}
+
+	_scripts.clear();
+	uint16 scrBase = word(0x70);
+	for (uint i = 0; i < word(0x6A); i++) {
+		RoomScript s;
+		s.pc = word(scrBase + 6 * i);
+		s.object = word(scrBase + 6 * i + 4);
+		_scripts.push_back(s);
+	}
+
+	debugC(1, kDebugResources, "%s: canvas %ux%u, scene height %u, %u objects, %u scripts",
+		   name.c_str(), _width, _height, _sceneHeight, _objects.size(), _scripts.size());
 	return true;
+}
+
+int Room::bankForPara(uint16 para) const {
+	for (uint i = 0; i < kNumBanks; i++)
+		if (_bankPara[i] == para && _banks[i].size())
+			return i;
+	return -1;
 }
 
 void Room::getPalette(const Resources &res, byte *rgb) const {

@@ -28,6 +28,34 @@ Console::Console() : GUI::Debugger() {
 	registerCmd("room", WRAP_METHOD(Console, cmdRoom));
 	registerCmd("scroll", WRAP_METHOD(Console, cmdScroll));
 	registerCmd("res", WRAP_METHOD(Console, cmdResources));
+	registerCmd("peter", WRAP_METHOD(Console, cmdPeter));
+	registerCmd("hotspots", WRAP_METHOD(Console, cmdHotspots));
+	registerCmd("walk", WRAP_METHOD(Console, cmdWalk));
+}
+
+bool Console::cmdPeter(int argc, const char **argv) {
+	Actor &p = g_engine->peter();
+	if (argc < 4) {
+		debugPrintf("Peter: frame %d at %d,%d\nUsage: peter <x> <y> <frame>\n", p.frame, p.x, p.y);
+		return true;
+	}
+	p.x = atoi(argv[1]);
+	p.y = atoi(argv[2]);
+	p.frame = atoi(argv[3]);
+	g_engine->redraw();
+	return false;
+}
+
+bool Console::cmdHotspots(int argc, const char **argv) {
+	g_engine->_showHotspots = !g_engine->_showHotspots;
+	g_engine->redraw();
+	return false;
+}
+
+bool Console::cmdWalk(int argc, const char **argv) {
+	g_engine->_showWalkGraph = !g_engine->_showWalkGraph;
+	g_engine->redraw();
+	return false;
 }
 
 bool Console::cmdRoom(int argc, const char **argv) {
