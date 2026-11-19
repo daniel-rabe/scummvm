@@ -90,9 +90,44 @@ private:
 	enum PendingType {
 		kPendingNone,
 		kPendingLook,		///< type 0: hotspot LOOK text (room file)
+		kPendingItemLook,	///< type 1: item description (DS:40C8)
 		kPendingRefusal,	///< type 2: PICK UP refusal via DS:4016
-		kPendingMessage		///< type 4: message in the data segment
+		kPendingMessage,	///< type 4: message in the data segment
+		kPendingPickup		///< [ABDD]: take the object of a hotspot
 	};
+
+	// logic.cpp: table-driven game logic
+	uint16 csWord(uint16 off) const;
+	uint16 barItem(int slot) const;
+	bool hasItem(uint16 item) const;
+	void addItem(uint16 item);
+	void removeItem(uint16 item);
+	void compactInventory();
+	uint16 selectedItem() const;
+	Message dsMessage(uint16 off) const;
+	void clickInventory(int x, int y);
+	void useAlone(uint16 item);
+	void combine(uint16 a, uint16 b);
+	void startPickup(uint16 hs);
+	void pickupTick();
+	void lookEventTick();
+	void itemLook(uint16 item);
+	void arrowTick();
+	// handlers.cpp: hand-ported x86 routines (docs/logic-ledger.md)
+	void runHandler(uint16 address);
+	// sequence.cpp: action sequences
+	void syncSlotsToDs();
+	void syncSlotsFromDs();
+	void sequencesTick();
+	void runSequence(uint16 &desc, uint16 &counter);
+	void trackStep(uint16 track);
+
+public:
+	bool sequenceRunning() const;
+	void startSequence(uint16 desc, bool channelB = false);
+	void giveItem(uint16 item) { addItem(item); }
+
+private:
 
 	bool loadGlobals();
 	void applyObjectState();
@@ -116,6 +151,8 @@ private:
 	void drawScreen();
 	void drawView();
 	void drawSpeech(const Common::Rect &view);
+	void drawSpeechLines(const Common::Rect &view, const Common::Array<Common::String> &lines, int ax, int bx,
+						 byte colour, bool peter);
 	void drawPanel();
 	void drawDebug();
 	const SpriteBank *bankFor(int id) const;
@@ -145,6 +182,18 @@ private:
 	int _fallbackLook = 0;			///< [AC25]
 	PendingType _pending = kPendingNone;
 	uint16 _pendingArg = 0;
+
+	bool _itemSelected = false;		///< [AC11]
+	int _itemX = 0;					///< [AC15]: x of the selected slot + 32
+	int _arrowTimer = 0;			///< [4194]
+	uint16 _pickupHotspot = 0;		///< [ABE5]
+	int _pickupTimer = 0;			///< [ABED]
+	uint16 _lookEvent = 0;			///< [ABF3]
+	int _selectAnim = 0;			///< [AC17]
+	SpriteBank _arrowsBank;			///< ARROWS.BIN
+	SpriteBank _tinkerBank;			///< TINKER.BIN
+	Actor _actors[6];				///< actors 1..5 (original DS:1410..); [0] unused, Peter is _player
+	uint16 _seqCounter = 0;			///< [AB79] counter of the channel being run
 
 	Message _speech;				///< refs of the message being said
 	uint _speechPart = 0;

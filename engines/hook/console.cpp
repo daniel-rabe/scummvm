@@ -31,6 +31,42 @@ Console::Console() : GUI::Debugger() {
 	registerCmd("peter", WRAP_METHOD(Console, cmdPeter));
 	registerCmd("hotspots", WRAP_METHOD(Console, cmdHotspots));
 	registerCmd("walk", WRAP_METHOD(Console, cmdWalk));
+	registerCmd("seq", WRAP_METHOD(Console, cmdSeq));
+	registerCmd("flag", WRAP_METHOD(Console, cmdFlag));
+	registerCmd("give", WRAP_METHOD(Console, cmdGive));
+}
+
+bool Console::cmdSeq(int argc, const char **argv) {
+	if (argc < 2) {
+		debugPrintf("Usage: seq <descriptor offset in hex>  (starts it on channel A)\n");
+		return true;
+	}
+	g_engine->startSequence((uint16)strtol(argv[1], nullptr, 16));
+	return false;
+}
+
+bool Console::cmdFlag(int argc, const char **argv) {
+	if (argc < 2) {
+		for (int i = 0; i < 32; i++)
+			if (g_engine->dsWord(0x86B7 + 2 * i))
+				debugPrintf("flag %d = %d\n", i, g_engine->dsWord(0x86B7 + 2 * i));
+		debugPrintf("Usage: flag <id> [value]\n");
+		return true;
+	}
+	int id = atoi(argv[1]);
+	if (argc > 2)
+		g_engine->setDsWord(0x86B7 + 2 * id, atoi(argv[2]));
+	debugPrintf("flag %d = %d\n", id, g_engine->dsWord(0x86B7 + 2 * id));
+	return true;
+}
+
+bool Console::cmdGive(int argc, const char **argv) {
+	if (argc < 2) {
+		debugPrintf("Usage: give <item id 1..38>\n");
+		return true;
+	}
+	g_engine->giveItem(atoi(argv[1]));
+	return true;
 }
 
 bool Console::cmdPeter(int argc, const char **argv) {

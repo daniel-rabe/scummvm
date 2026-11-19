@@ -38,6 +38,9 @@ private:
 	bool cmdPeter(int argc, const char **argv);
 	bool cmdHotspots(int argc, const char **argv);
 	bool cmdWalk(int argc, const char **argv);
+	bool cmdSeq(int argc, const char **argv);
+	bool cmdFlag(int argc, const char **argv);
+	bool cmdGive(int argc, const char **argv);
 };
 
 } // End of namespace Hook

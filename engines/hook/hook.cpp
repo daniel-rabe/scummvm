@@ -142,6 +142,20 @@ bool HookEngine::loadGlobals() {
 		return false;
 	if (!_lang.load(_res, "ENGLISH.BIN"))
 		return false;
+	Buffer arrows;
+	if (!_res.load("ARROWS.BIN", arrows) || !_arrowsBank.load(arrows.data(), arrows.size(), _res.ds(kXlatArrows)))
+		return false;
+	Buffer tinker;
+	if (!_res.load("TINKER.BIN", tinker) || !_tinkerBank.load(tinker.data(), tinker.size(), _res.ds(kXlatTinker)))
+		return false;
+	// Actors 1..5 (Tinkerbell's trail) start as in the data segment
+	for (int i = 1; i < 6; i++) {
+		uint16 slot = 0x13FA + 22 * i;
+		_actors[i].bank = kBankTinker;
+		_actors[i].frame = (int16)_res.dsWord(slot + 4);
+		_actors[i].x = (int16)_res.dsWord(slot + 6);
+		_actors[i].y = (int16)_res.dsWord(slot + 0xA);
+	}
 	_font.load(_res);
 	_player.facing = kFacingDown;
 	return true;
@@ -273,19 +287,38 @@ void HookEngine::tick() {
 		}
 	}
 
+	arrowTick();
+	_selectAnim = (_selectAnim + 1) & 3;
 	bool talking = _speechTotal > 0;
 	if (talking) {
 		speechTick();
-	} else if (_roomCountdown <= 0) {
-		if (_clickRight)
-			rightClick();
-		if (_clickLeft)
-			leftClick(_mouse.x, _mouse.y);
+		_clickLeft = _clickRight = false;
+	} else if (_pickupTimer > 0 && --_pickupTimer > 0) {
+		// 055AF: holding the pick-up pose
+		pickupTick();
+		_clickLeft = _clickRight = false;
+	} else if (sequenceRunning()) {
+		// 055A0: channel A drives the scene; no input, Peter is moved by the sequence
+		_clickLeft = _clickRight = false;
+	} else {
+		if (_lookEvent)
+			lookEventTick();
+		if (_speechTotal == 0 && _roomCountdown <= 0) {
+			if (_clickRight)
+				rightClick();
+			if (_clickLeft)
+				leftClick(_mouse.x, _mouse.y);
+		}
+		_clickLeft = _clickRight = false;
+		if (_player.update(_speechTotal > 0))
+			dispatchPending();
 	}
-	_clickLeft = _clickRight = false;
 
-	if (_player.update(_speechTotal > 0))
-		dispatchPending();
+	sequencesTick();
+	// 068E8: Tinkerbell's trail only shows while she follows Peter ([8739])
+	if (!dsWord(0x8739))
+		for (int i = 1; i < 6; i++)
+			_actors[i].frame = -1;
 
 	applyScroll();
 	_dirty = true;
@@ -381,7 +414,7 @@ void HookEngine::clickPanel(int x, int y) {
 			return;
 		}
 	}
-	// inventory bar and arrows: milestone M4
+	clickInventory(x, y);
 }
 
 void HookEngine::walkToHotspot(uint16 hs) {
@@ -453,6 +486,8 @@ void HookEngine::clickView(int cx, int cy) {
 			uint16 v = dsWord(hs + kHsLookVar) + 1;
 			setDsWord(hs + kHsLookVar, v > 3 ? 3 : v);
 			setPending(kPendingRefusal, (uint16)(-pick));
+		} else {
+			setPending(kPendingPickup, hs);
 		}
 		walkToHotspot(hs);
 		return;
@@ -496,8 +531,21 @@ void HookEngine::dispatchPending() {
 		uint16 msg = _room.word(table + 4 * (look - 1));
 		if (msg < _room.data().size())
 			say(readMessage(_room.data().data() + msg, _room.data().size() - msg), dsWord(arg + kHsFacing));
+		// 07CF2: a LOOK event fires after the text; one-shot unless its high byte is 'L'
+		uint16 ev = dsWord(arg + kHsLookEvent);
+		if (ev) {
+			_lookEvent = ev;
+			if ((ev >> 8) != 0x4C)
+				setDsWord(arg + kHsLookEvent, 0);
+		}
 		break;
 	}
+	case kPendingItemLook:
+		itemLook(arg);
+		break;
+	case kPendingPickup:
+		startPickup(arg);
+		break;
 	case kPendingRefusal: {
 		uint16 msg = dsWord(kDsRefusals + 4 * (arg - 1));
 		say(readMessage(dsPtr(msg), _ds.size() - msg), _player.facing);
@@ -551,6 +599,8 @@ const SpriteBank *HookEngine::bankFor(int id) const {
 		return &_room.bank(id - kBankRoom0);
 	if (id == kBankPeter)
 		return &_peterBank;
+	if (id == kBankTinker)
+		return &_tinkerBank;
 	return nullptr;
 }
 
@@ -588,6 +638,8 @@ void HookEngine::drawView() {
 			items.push_back(Item{ &a, f, order, xOffset });
 	};
 	add(_player.actor, 0, kPeterXOffset);
+	for (int i = 1; i < 6; i++)
+		add(_actors[i], i, kObjectXOffset);
 	for (uint i = 0; i < _objects.size(); i++)
 		add(_objects[i], 6 + i, kObjectXOffset);
 	Common::sort(items.begin(), items.end(), [](const Item &p, const Item &q) {
@@ -601,15 +653,25 @@ void HookEngine::drawView() {
 }
 
 void HookEngine::drawSpeech(const Common::Rect &view) {
-	// 06BB1 / 06C0B: lines above Peter, centred on him, kept inside the view
-	if (_speech.empty() || _speechPart >= _speech.size())
-		return;
-	Common::Array<Common::String> lines = _lang.lines(_speech[_speechPart]);
+	// 06BB1: Peter's line - from say() or from a sequence writing its text ref to [ABF7]
+	uint16 ref = dsWord(0xABF7);
+	if (!ref && !_speech.empty() && _speechPart < _speech.size())
+		ref = _speech[_speechPart];
+	if (ref)
+		drawSpeechLines(view, _lang.lines(ref), _player.actor.x, _player.actor.y, _speechColour, true);
+	// 06B7B: another character's line, [AC44] at [ABB1]/[ABB3], speaker colour 2
+	if (dsWord(0xAC44))
+		drawSpeechLines(view, _lang.lines(dsWord(0xAC44)), (int16)dsWord(0xABB1), (int16)dsWord(0xABB3),
+						_res.image()[0x6E5C + 2], false);
+}
+
+void HookEngine::drawSpeechLines(const Common::Rect &view, const Common::Array<Common::String> &lines, int ax, int bx,
+								 byte colour, bool peter) {
+	// 06C0B: lines above the anchor, centred on it, kept inside the view
 	if (lines.empty())
 		return;
-	int ax = _player.actor.x, bx = _player.actor.y;
-	if (_player.depth()) {
-		// 06BE8: in the depth region the text sits on the sprite's top edge, 4-aligned
+	if (peter && _player.depth()) {
+		// 06BE8: in Peter's depth region the text sits on the sprite's top edge, 4-aligned
 		const Frame *f = _peterBank.frame(_player.actor.frame);
 		bx += 0x30 - (f ? f->height : 0x30);
 		if ((bx & 3) == 3)
@@ -633,7 +695,7 @@ void HookEngine::drawSpeech(const Common::Rect &view) {
 	Graphics::Surface &s = *_screen->surfacePtr();
 	for (uint i = 0; i < lines.size(); i++) {
 		int lw = lines[i].size() * Font::kWidth;
-		_font.drawString(s, x + (maxW - lw) / 2 - _scrollX, bx + Font::kHeight * i - _scrollY, lines[i], _speechColour, view);
+		_font.drawString(s, x + (maxW - lw) / 2 - _scrollX, bx + Font::kHeight * i - _scrollY, lines[i], colour, view);
 	}
 }
 
@@ -657,11 +719,10 @@ void HookEngine::drawPanel() {
 				dst[x] = src[x] + 0xE0;
 		}
 	}
-	// Inventory icons (722C): 6 slots from the scroll position, icon k = item k, opaque.
-	uint16 scroll = dsWord(kDsInventoryScroll);
+	// Inventory icons (722C): 6 slots from DS:8709 + scroll (the outer two sit under the
+	// arrows), icon k = item k, opaque.
 	for (int k = 0; k < kInventorySlots; k++) {
-		uint idx = scroll + k;
-		uint16 item = idx < 16 ? dsWord(kDsInventory + 2 * idx) : 0;
+		uint16 item = barItem(k);
 		uint32 off = item * kIconWidth * kIconHeight;
 		if (!item || off + kIconWidth * kIconHeight > _icons.size())
 			continue;
@@ -670,6 +731,27 @@ void HookEngine::drawPanel() {
 			for (int x = 0; x < kIconWidth; x++)
 				dst[x] = _icons[off + y * kIconWidth + x] + 0xE0;
 		}
+	}
+	// Arrows (071E5): ARROWS frames at the records DS:4164 / DS:4182 {frame, x + 32, ?, y}
+	Graphics::Surface &s = *_screen->surfacePtr();
+	Common::Rect panel(0, kViewHeight, kScreenWidth, kScreenHeight);
+	for (uint16 rec : { (uint16)0x4164, (uint16)0x4182 }) {
+		const Frame *f = _arrowsBank.frame((int16)dsWord(rec));
+		if (f)
+			SpriteBank::draw(s, *f, (int16)dsWord(rec + 2) - 32, kViewHeight + (int16)dsWord(rec + 6), panel);
+	}
+	// Selection box (06F17 / 06FE2): ARROWS frames 4,5,6,5 cycling on the selected item, or on
+	// the item under the mouse while LOOK / USE / GIVE is chosen
+	int boxX = -1;
+	if (_itemSelected)
+		boxX = _itemX;
+	else if (((_verb & 0xF) == 1 || (_verb & 0xF) == 4 || (_verb & 0xF) == 5) && _mouse.y >= kViewHeight + 44 &&
+			 _mouse.y < kViewHeight + 68 && _mouse.x >= 96 && _mouse.x < 224 && barItem((_mouse.x - 96) / 32 + 1))
+		boxX = _mouse.x + 32;
+	if (boxX >= 0x60 && boxX <= 0x120) {
+		const Frame *f = _arrowsBank.frame((int16)dsWord(0x0E64 + 2 * _selectAnim));
+		if (f)
+			SpriteBank::draw(s, *f, (boxX & ~31) + 2 - 0x22, kViewHeight + 44, panel);
 	}
 }
 
@@ -755,6 +837,8 @@ Common::Error HookEngine::dumpFrames(const Common::Path &dir) {
 	};
 	if (ConfMan.hasKey("dump_clicks")) {
 		enterRoom(ConfMan.hasKey("dump_room") ? ConfMan.getInt("dump_room") : 0, 0);
+		if (ConfMan.hasKey("dump_seq"))
+			startSequence((uint16)strtol(ConfMan.get("dump_seq").c_str(), nullptr, 16));
 		Common::StringTokenizer tok(ConfMan.get("dump_clicks"), ";");
 		int step = 0;
 		while (!tok.empty()) {

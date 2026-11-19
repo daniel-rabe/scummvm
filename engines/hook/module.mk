@@ -3,11 +3,14 @@ MODULE := engines/hook
 MODULE_OBJS = \
 	anim.o \
 	console.o \
+	handlers.o \
 	hook.o \
+	logic.o \
 	metaengine.o \
 	player.o \
 	resources.o \
 	room.o \
+	sequence.o \
 	sprites.o \
 	text.o \
 	walk.o

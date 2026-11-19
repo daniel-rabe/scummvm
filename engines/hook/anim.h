@@ -32,6 +32,7 @@ enum BankId {
 	kBankNone = -1,
 	kBankRoom0 = 0,		///< room banks 0..3 = header +30/+36/+3C/+42
 	kBankPeter = 4,		///< PANSPRIT.BIN
+	kBankTinker = 5,	///< TINKER.BIN
 	kNumBankIds
 };
 
