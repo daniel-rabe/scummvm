@@ -278,8 +278,12 @@ void HookEngine::tick() {
 	_player.updateDepth(_room);
 	int canvasX = _mouse.x + _scrollX + 1, canvasY = _mouse.y + _scrollY;
 	_hover = (_mouse.y < kViewHeight) ? hitTest(canvasX, canvasY) : 0;
-	edgeScroll();
-	checkExits();
+	// 05455: no edge scrolling (nor while flag 34 is set) and no exits while channel A runs
+	if (!sequenceRunning()) {
+		if (!dsWord(0x86FB))
+			edgeScroll();
+		checkExits();
+	}
 
 	// 0C873: room change countdown
 	if (_roomCountdown > 0 && --_roomCountdown == 0) {
@@ -307,8 +311,9 @@ void HookEngine::tick() {
 		// 05469: a running conversation takes the input
 		conversationTick();
 		_clickLeft = _clickRight = false;
-	} else if (sequenceRunning()) {
+	} else if (sequenceRunning() && !dsWord(0xABC9)) {
 		// 055A0: channel A drives the scene; no input, Peter is moved by the sequence
+		// (unless [ABC9] lets Peter walk while it runs)
 		_clickLeft = _clickRight = false;
 	} else if (_giveTimer > 0) {
 		// 055C1: holding the item out, then the GIVE logic
@@ -330,6 +335,7 @@ void HookEngine::tick() {
 	}
 
 	sequencesTick();
+	roomHookTick();
 	// 068E8: Tinkerbell's trail only shows while she follows Peter ([8739])
 	if (!dsWord(0x8739))
 		for (int i = 1; i < 6; i++)
@@ -624,6 +630,8 @@ void HookEngine::say(const Message &m, int facing) {
 	_speech = m;
 	_speechPart = 0;
 	_speechTotal = 0;
+	if (!_lang.lines(m[0]).empty())
+		debugC(1, kDebugScript, "say \"%s\"", _lang.lines(m[0])[0].c_str());
 	for (uint16 ref : m)
 		_speechTotal += messageChars(_lang.lines(ref)) * kTextTicksPerChar;
 	_speechTicks = messageChars(_lang.lines(m[0])) * kTextTicksPerChar;
@@ -887,11 +895,26 @@ Common::Error HookEngine::dumpFrames(const Common::Path &dir) {
 			warning("Hook: cannot write %s", path.toString().c_str());
 	};
 	if (ConfMan.hasKey("dump_clicks")) {
-		enterRoom(ConfMan.hasKey("dump_room") ? ConfMan.getInt("dump_room") : 0, 0);
+		enterRoom(ConfMan.hasKey("dump_room") ? ConfMan.getInt("dump_room") : 0,
+				  ConfMan.hasKey("dump_entry") ? ConfMan.getInt("dump_entry") : 0);
 		if (ConfMan.hasKey("dump_items")) {
 			Common::StringTokenizer items(ConfMan.get("dump_items"), ",");
 			while (!items.empty())
 				addItem(atoi(items.nextToken().c_str()));
+		}
+		if (ConfMan.hasKey("dump_scroll")) {
+			int sx = 0, sy = 0;
+			sscanf(ConfMan.get("dump_scroll").c_str(), "%d,%d", &sx, &sy);
+			setScroll(sx, sy);
+		}
+		if (ConfMan.hasKey("dump_flags")) {
+			// "id=value,id=value"
+			Common::StringTokenizer flags(ConfMan.get("dump_flags"), ",");
+			while (!flags.empty()) {
+				int id = 0, v = 0;
+				sscanf(flags.nextToken().c_str(), "%d=%d", &id, &v);
+				setDsWord(0x86B7 + 2 * id, v);
+			}
 		}
 		if (ConfMan.hasKey("dump_seq"))
 			startSequence((uint16)strtol(ConfMan.get("dump_seq").c_str(), nullptr, 16));

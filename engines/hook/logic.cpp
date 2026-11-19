@@ -187,12 +187,13 @@ void HookEngine::useAlone(uint16 item) {
 	_verb = 0;
 	_itemSelected = false;
 	_itemX = 0;
-	if (seg) {
-		setPending(kPendingMessage, dsWord(off + 2));
-		_player.walkTo(_player.feetX(), _player.feetY());
-	} else {
+	// 08B41: the pointer leads to code, or to {FFFF, message} (the segment word is relocated)
+	(void)seg;
+	_player.walkTo(_player.feetX(), _player.feetY());
+	if (csWord(off) == 0xFFFF)
+		setPending(kPendingMessage, csWord(off + 2));
+	else
 		runHandler(off);
-	}
 }
 
 void HookEngine::combine(uint16 a, uint16 b) {
@@ -254,7 +255,14 @@ void HookEngine::pickupTick() {
 	_player.actor.frame = (int16)dsWord(rec + 0x0E);
 	if (_pickupTimer != 1)
 		return;
-	// 0851D: hide the object, clear the hotspot, give the item
+	takeObjectState(k);
+	_prevVerb = _verb;
+	_verb = 0;
+}
+
+void HookEngine::takeObjectState(uint16 k) {
+	// 0851D: hide the object, clear the hotspot, give the item (object-state entry k, 1-based)
+	uint16 rec = dsWord(kDsObjectState + 4 * _room.number()) + 2 + 16 * (k - 1);
 	uint16 obj = dsWord(rec), hsRec = dsWord(kDsHotspotState + 4 * _room.number()) + 24 * dsWord(rec + 2);
 	if (obj < _objects.size())
 		_objects[obj].frame = -1;
@@ -267,8 +275,6 @@ void HookEngine::pickupTick() {
 	// 0A994: per-item hook after taking it
 	if (item >= 1 && item <= 38 && csWord(kCsPickupHook + 4 * (item - 1)))
 		runHandler(csWord(kCsPickupHook + 4 * (item - 1)));
-	_prevVerb = _verb;
-	_verb = 0;
 }
 
 void HookEngine::lookEventTick() {
@@ -347,8 +353,9 @@ void HookEngine::useOnHotspot(uint16 hs) {
 }
 
 void HookEngine::useWithItem(uint16 hs) {
-	// 08DAE: the source hotspot's use picks the list; the hotspot at Peter's feet picks the
-	// entry (the same use number = entry 0, use = -(k + 2) = entry k)
+	// 08DAE: the source hotspot's use picks the list; the hotspot at Peter's feet (main loop
+	// ax = [1400], bx = [1404] + 0x30, tested at ax - 0x10) picks the entry (the same use
+	// number = entry 0, use = -(k + 2) = entry k)
 	int16 sourceUse = (int16)dsWord(hs + 0x0A);
 	uint16 at = hitTest(_player.feetX(), _player.feetY());
 	if (!at)

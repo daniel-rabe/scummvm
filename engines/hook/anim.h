@@ -55,6 +55,8 @@ public:
 	void start(const Room &room);
 	void tick(Room &room, Common::Array<Actor> &objects);
 	uint16 phase() const { return _phase; }
+	/** Move script slot `slot`'s pc by `delta` bytes (room 0's hook switches scripts this way). */
+	void movePc(uint slot, int delta) { if (slot < _slots.size()) _slots[slot].pc += delta; }
 
 private:
 	struct Slot {

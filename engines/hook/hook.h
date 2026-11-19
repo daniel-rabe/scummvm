@@ -42,9 +42,9 @@ namespace Hook {
 /**
  * Engine for Hook (Ocean / Shadow Software, 1992, DOS).
  *
- * Status: milestone M3 (movement and interaction). Peter walks the room's walk graph,
- * hotspots react to the verbs (LOOK texts, the engine's stock replies), exit zones change
- * rooms. Puzzle logic (TALK, PICK UP, USE, GIVE effects) is milestone M4.
+ * Status: milestone M4 (game logic) in progress. Verbs, inventory, conversations, GIVE,
+ * action sequences and the hand-ported routines of the pirate town (rooms 0-11) work; the
+ * Neverland and finale routines (handlers.cpp, docs/logic-ledger.md) are still to come.
  * Keys: arrows scroll, PgUp/PgDn change room. Console: room, scroll, peter, hotspots,
  * walk, res.
  */
@@ -138,6 +138,14 @@ private:
 	void arrowTick();
 	// handlers.cpp: hand-ported x86 routines (docs/logic-ledger.md)
 	void runHandler(uint16 address);
+	void runCue(uint16 table, uint16 ptrVar);
+	void abortSequences() { _seqAbort = true; }
+	void showMessage(uint16 off);
+	Actor &slotActor(uint16 dsSlot);
+	void takeObjectState(uint16 k);
+	void roomHookTick();
+	void stopPeter();
+	bool loadPeterBank(uint16 nameOff);
 	// sequence.cpp: action sequences
 	void syncSlotsToDs();
 	void syncSlotsFromDs();
@@ -217,6 +225,7 @@ private:
 	SpriteBank _tinkerBank;			///< TINKER.BIN
 	Actor _actors[6];				///< actors 1..5 (original DS:1410..); [0] unused, Peter is _player
 	uint16 _seqCounter = 0;			///< [AB79] counter of the channel being run
+	bool _seqAbort = false;			///< a callback left the sequence runner (see sequencesTick)
 
 	bool _convActive = false;		///< [AC36] != 0
 	bool _convInDs = false;			///< struct and menus in the data segment (GIVE replies)

@@ -33,6 +33,7 @@ namespace Hook {
 static const uint16 kDsActorSlots = 0x13FA;		// actors 0..5, 22 bytes each
 static const uint16 kDsObjectSlots = 0x147E;	// room objects
 static const uint16 kSlotSize = 22;
+static const uint16 kDsScrollRequests = 0xAB93;
 static const uint16 kDsChannelA = 0xAC30;		// far ptr, counter at +4
 static const uint16 kDsChannelB = 0xAC48;
 
@@ -66,6 +67,9 @@ void HookEngine::syncSlotsToDs() {
 		put(kDsActorSlots + kSlotSize * i, _actors[i]);
 	for (uint i = 0; i < _objects.size(); i++)
 		put(kDsObjectSlots + kSlotSize * i, _objects[i]);
+	// scroll requests [AB93] right, [AB95] left, [AB97] up, [AB99] down
+	for (int i = 0; i < 4; i++)
+		setDsWord(kDsScrollRequests + 2 * i, (uint16)_scrollRequest[i]);
 }
 
 void HookEngine::syncSlotsFromDs() {
@@ -80,6 +84,8 @@ void HookEngine::syncSlotsFromDs() {
 		get(kDsActorSlots + kSlotSize * i, _actors[i]);
 	for (uint i = 0; i < _objects.size(); i++)
 		get(kDsObjectSlots + kSlotSize * i, _objects[i]);
+	for (int i = 0; i < 4; i++)
+		_scrollRequest[i] = (int16)dsWord(kDsScrollRequests + 2 * i);
 }
 
 bool HookEngine::sequenceRunning() const {
@@ -94,10 +100,17 @@ void HookEngine::sequencesTick() {
 	if (!dsWord(kDsChannelA) && !dsWord(kDsChannelB))
 		return;
 	syncSlotsToDs();
+	_seqAbort = false;
 	for (uint16 ch : { kDsChannelA, kDsChannelB }) {
 		uint16 desc = dsWord(ch);
 		uint16 counter = dsWord(ch + 4);
 		runSequence(desc, counter);
+		if (_seqAbort) {
+			// A callback returned straight to the main loop (it pops the caller's frame):
+			// no store-back for this channel, channel B is skipped this tick.
+			_seqAbort = false;
+			break;
+		}
 		setDsWord(ch, desc);
 		setDsWord(ch + 4, counter);
 	}
@@ -138,6 +151,8 @@ void HookEngine::runSequence(uint16 &desc, uint16 &counter) {
 			syncSlotsFromDs();
 			runHandler(code);
 			syncSlotsToDs();
+			if (_seqAbort)
+				return;
 		} else {
 			trackStep(dsWord(p));
 			p += 4;

@@ -72,6 +72,10 @@ public:
 	int feetX() const { return actor.x - 16; }
 	int feetY() const { return actor.y + 48; }
 	const WalkGraph &graph() const { return _graph; }
+	/** 0A215: switch to the walk graph that contains global node `node`. */
+	void selectGraph(uint node) { if (_room) _graph.select(*_room, node); }
+	/** Restart the walk-cycle frame tables ([0D80]/[0DBE] = 0). */
+	void resetStepPhase() { _hIndex = _vIndex = 0; }
 
 	/** 53EA: depth factor from the feet y and the room header (0 = far region / none). */
 	void updateDepth(const Room &room);
