@@ -23,9 +23,9 @@
 #include "common/config-manager.h"
 #include "common/debug-channels.h"
 #include "common/endian.h"
-#include "common/events.h"
 #include "common/file.h"
 #include "common/system.h"
+#include "common/tokenizer.h"
 #include "engines/util.h"
 #include "graphics/cursorman.h"
 #include "graphics/framelimiter.h"
@@ -40,32 +40,65 @@ namespace Hook {
 HookEngine *g_engine;
 
 // Data-segment tables (offsets in the DS of the supported HOOK.EXE build)
-static const uint16 kDsPeterSlot = 0x13FA;		// actor 0: +04 frame, +06 x, +0A y
+static const uint16 kDsHotspotState = 0x1962;	// per room: far ptr to 24-byte hotspot records
+static const uint16 kDsObjectState = 0x4020;	// per room: far ptr to the object-state list
 static const uint16 kDsInventory = 0x870B;		// 16 x u16 item ids
 static const uint16 kDsInventoryScroll = 0x8705;
-static const uint16 kDsObjectState = 0x4020;	// per room: far ptr to the object-state list
+static const uint16 kDsVerbButtons = 0x0D40;	// 5 x {x1, y1, x2, y2, src x, src y}, panel coords
+static const uint16 kDsRefusals = 0x4016;		// PICK UP refusals: far ptrs, index -pickup - 1
+static const uint16 kCsSpeakerColour = 0x6E5C;	// code segment: text colour per speaker (DB, DA, C1, DE)
 static const uint16 kDsCursor = 0x0575;			// 12x24 pointer, planar, values 1..3 (+0xDC)
+
+// Stock replies (data-segment messages)
+static const uint16 kMsgUseNothing = 0xAD98;	// USE without hotspot
+static const uint16 kMsgTalkThat = 0xAD9E;		// TALK to a hotspot that does not talk
+static const uint16 kMsgUseWithItem = 0xADAA;
+static const uint16 kMsgLookFallback[3] = { 0xADBC, 0xADC2, 0xADB6 };	// [AC25] = 0, 1, 2
+static const uint16 kMsgTalkBusy = 0xADC8;		// talk = 0x8000
+static const uint16 kMsgTalkBusy2 = 0xADDA;		// talk = 0x800n
+
+// Verbs ([0E60] low nibble)
+enum { kVerbLook = 1, kVerbTalk = 2, kVerbPickUp = 3, kVerbUse = 4, kVerbGive = 5 };
+static const uint16 kVerbLatched = 0x8000;
+
+// Hotspot record fields (docs/formats.md section 5, "Hotspots and verbs")
+enum {
+	kHsExitRoom = 0x00, kHsFacing = 0x02, kHsLook = 0x04, kHsLookVar = 0x06, kHsPickUp = 0x08,
+	kHsUse = 0x0A, kHsGive = 0x0E, kHsLookEvent = 0x10, kHsWalkNode = 0x12, kHsTalk = 0x14,
+	kHotspotSize = 24
+};
 
 static const int kObjectXOffset = 16;			// 0CFA8: objects are drawn at x - 16
 static const int kPeterXOffset = 30;			// 0CF76: actor 0 at x - 16 - 14
 static const int kInventoryX = 64, kInventoryY = 44, kInventorySlots = 6;
 static const int kIconWidth = 32, kIconHeight = 24;
+static const int kTextTicksPerChar = 3;			// DS:3DD4
+static const int kScrollRequest = 0x18;
+static const int kScrollLeftLimit = 16;
 
 HookEngine::HookEngine(OSystem *syst, const ADGameDescription *gameDesc) : Engine(syst),
-	_gameDescription(gameDesc) {
+	_gameDescription(gameDesc), _player(this) {
 	g_engine = this;
-	memset(_inventory, 0, sizeof(_inventory));
 }
 
 HookEngine::~HookEngine() {
 	delete _screen;
 }
 
+uint16 HookEngine::dsWord(uint16 off) const {
+	return off + 2u <= _ds.size() ? READ_LE_UINT16(_ds.data() + off) : 0;
+}
+
+void HookEngine::setDsWord(uint16 off, uint16 v) {
+	if (off + 2u <= _ds.size())
+		WRITE_LE_UINT16(_ds.data() + off, v);
+}
+
 Common::Error HookEngine::run() {
 	if (!_res.open("HOOK.EXE"))
 		return Common::Error(Common::kReadingFailed, "HOOK.EXE");
 	if (!loadGlobals())
-		return Common::Error(Common::kReadingFailed, "PANSPRIT.BIN / PANEL.BIN / INVENTRY.BIN");
+		return Common::Error(Common::kReadingFailed, "PANSPRIT.BIN / PANEL.BIN / INVENTRY.BIN / ENGLISH.BIN");
 
 	initGraphics(kScreenWidth, kScreenHeight);
 	_screen = new Graphics::Screen();
@@ -76,7 +109,8 @@ Common::Error HookEngine::run() {
 	if (ConfMan.hasKey("dump_frames"))
 		return dumpFrames(Common::Path(ConfMan.get("dump_frames"), '/'));
 
-	if (!enterRoom(0))
+	// New game: room [86F7] = 0, entry [86F9] = 0
+	if (!enterRoom(0, 0))
 		return Common::Error(Common::kReadingFailed, "LOCAT00.BIN");
 	setCursor();
 	CursorMan.showMouse(true);
@@ -84,10 +118,8 @@ Common::Error HookEngine::run() {
 	Graphics::FrameLimiter limiter(g_system, kTicksPerSecond);
 	Common::Event e;
 	while (!shouldQuit()) {
-		while (g_system->getEventManager()->pollEvent(e)) {
-			if (e.type == Common::EVENT_KEYDOWN)
-				handleKey(e.kbd);
-		}
+		while (g_system->getEventManager()->pollEvent(e))
+			handleEvent(e);
 		tick();
 		drawScreen();
 		limiter.delayBeforeSwap();
@@ -98,6 +130,9 @@ Common::Error HookEngine::run() {
 }
 
 bool HookEngine::loadGlobals() {
+	const byte *ds = _res.ds(0);
+	_ds = Buffer(ds, _res.image().size() - Resources::kDataSegment);
+
 	Buffer pan;
 	if (!_res.load("PANSPRIT.BIN", pan) || !_peterBank.load(pan.data(), pan.size(), _res.ds(kXlatPeter)))
 		return false;
@@ -105,19 +140,14 @@ bool HookEngine::loadGlobals() {
 		return false;
 	if (!_res.load("INVENTRY.BIN", _icons))
 		return false;
-	for (int i = 0; i < 16; i++)
-		_inventory[i] = _res.dsWord(kDsInventory + 2 * i);
-	_inventoryScroll = _res.dsWord(kDsInventoryScroll);
-
-	// Actor 0 starts in the pose the data segment holds for a new game.
-	_peter.bank = kBankPeter;
-	_peter.frame = (int16)_res.dsWord(kDsPeterSlot + 4);
-	_peter.x = (int16)_res.dsWord(kDsPeterSlot + 6);
-	_peter.y = (int16)_res.dsWord(kDsPeterSlot + 0xA);
+	if (!_lang.load(_res, "ENGLISH.BIN"))
+		return false;
+	_font.load(_res);
+	_player.facing = kFacingDown;
 	return true;
 }
 
-bool HookEngine::enterRoom(uint number) {
+bool HookEngine::enterRoom(uint number, uint entry) {
 	if (!_room.load(_res, number))
 		return false;
 	byte pal[256 * 3];
@@ -135,35 +165,385 @@ bool HookEngine::enterRoom(uint number) {
 	}
 	applyObjectState();
 	_anim.start(_room);
-	// Until Peter's movement and scrolling (53EA) are ported in M3: centre on him.
-	setScroll(_peter.x - kScreenWidth / 2, _peter.y - 100);
+
+	_pending = kPendingNone;
+	_speech.clear();
+	_speechTicks = _speechTotal = 0;
+	for (int i = 0; i < 4; i++)
+		_scrollRequest[i] = 0;
+	_roomCountdown = 10;	// 0CABF: exits stay disabled for the first 10 ticks
+	_roomGuard = true;
+
+	_player.enterRoom(_room, entry);
+	// 0CA5A: scroll x = Peter - 176, clamped to 16 .. header +1C - 320 (then floored at 15)
+	int sx = _player.actor.x - 0xB0;
+	if (sx <= kScrollLeftLimit)
+		sx = kScrollLeftLimit;
+	else if (sx + kScreenWidth >= _room.sword(0x1C))
+		sx = _room.sword(0x1C) - kScreenWidth;
+	if (sx < kScrollLeftLimit)
+		sx = kScrollLeftLimit - 1;
+	_scrollX = sx;
+	_scrollY = _room.sword(0x16);
+	_dirty = true;
+	debugC(1, kDebugScript, "Room %u entry %u: Peter %d,%d, scroll %d,%d", number, entry,
+		   _player.actor.x, _player.actor.y, _scrollX, _scrollY);
 	return true;
 }
 
 void HookEngine::applyObjectState() {
 	// 0844B: DS:[4020 + room*4] -> u16 n, n x 16-byte records
-	// {object, hotspot, visible, frame, look, ?, pickup, ?}. Only the object side is
-	// applied here; the hotspot side belongs to the game logic (M3/M4).
-	uint16 list = _res.dsWord(kDsObjectState + 4 * _room.number());
-	uint16 n = _res.dsWord(list);
+	// {object, hotspot, visible, frame, look, ?, pickup, ?}
+	uint16 list = dsWord(kDsObjectState + 4 * _room.number());
+	uint16 n = dsWord(list);
+	uint16 hsBase = dsWord(kDsHotspotState + 4 * _room.number());
 	for (uint i = 0; i < n; i++) {
 		uint16 rec = list + 2 + 16 * i;
-		uint16 obj = _res.dsWord(rec);
-		if (obj >= _objects.size())
-			continue;
-		_objects[obj].frame = _res.dsWord(rec + 4) ? (int16)_res.dsWord(rec + 6) : -1;
+		uint16 obj = dsWord(rec), hs = hsBase + kHotspotSize * dsWord(rec + 2);
+		bool visible = dsWord(rec + 4) != 0;
+		if (obj < _objects.size())
+			_objects[obj].frame = visible ? (int16)dsWord(rec + 6) : -1;
+		setDsWord(hs + kHsLook, visible ? dsWord(rec + 8) : 0);
+		setDsWord(hs + kHsPickUp, visible ? (dsWord(rec + 0xC) ? dsWord(rec + 0xC) : i + 1) : 0);
 	}
 }
 
 void HookEngine::setScroll(int x, int y) {
-	_scrollX = CLIP<int>(x, 0, MAX<int>(0, _room.width() - kScreenWidth));
+	_scrollX = CLIP<int>(x, kScrollLeftLimit, MAX<int>(kScrollLeftLimit, _room.sword(0x1C) - kScreenWidth));
 	_scrollY = CLIP<int>(y, 0, MAX<int>(0, (int)_room.sceneHeight() - kViewHeight));
 	_dirty = true;
 }
 
+uint16 HookEngine::hotspotRecord(uint k) const {
+	return dsWord(kDsHotspotState + 4 * _room.number()) + kHotspotSize * k;
+}
+
+uint16 HookEngine::hitTest(int cx, int cy) const {
+	// 06E6B: first rectangle that contains the point wins
+	uint16 rects = _room.word(0x7C);
+	for (uint k = 0; k < _room.word(0x7A); k++) {
+		int x1 = _room.sword(rects + 8 * k), y1 = _room.sword(rects + 8 * k + 2);
+		int x2 = _room.sword(rects + 8 * k + 4), y2 = _room.sword(rects + 8 * k + 6);
+		if (x1 <= cx && y1 <= cy && x2 >= cx && y2 >= cy)
+			return hotspotRecord(k);
+	}
+	return 0;
+}
+
+void HookEngine::handleEvent(const Common::Event &e) {
+	switch (e.type) {
+	case Common::EVENT_KEYDOWN:
+		handleKey(e.kbd);
+		break;
+	case Common::EVENT_MOUSEMOVE:
+		_mouse = e.mouse;
+		break;
+	case Common::EVENT_LBUTTONDOWN:
+		_mouse = e.mouse;
+		_clickLeft = true;
+		break;
+	case Common::EVENT_RBUTTONDOWN:
+		_mouse = e.mouse;
+		_clickRight = true;
+		break;
+	default:
+		break;
+	}
+}
+
 void HookEngine::tick() {
 	_anim.tick(_room, _objects);
+
+	// 053EA: depth factor, hotspot under the mouse, edge scrolling, exit zones
+	_player.updateDepth(_room);
+	int canvasX = _mouse.x + _scrollX + 1, canvasY = _mouse.y + _scrollY;
+	_hover = (_mouse.y < kViewHeight) ? hitTest(canvasX, canvasY) : 0;
+	edgeScroll();
+	checkExits();
+
+	// 0C873: room change countdown
+	if (_roomCountdown > 0 && --_roomCountdown == 0) {
+		if (_roomGuard) {
+			_roomGuard = false;
+			_roomCountdown = -1;
+		} else {
+			enterRoom(_nextRoom, _nextEntry);
+			_clickLeft = _clickRight = false;
+			return;
+		}
+	}
+
+	bool talking = _speechTotal > 0;
+	if (talking) {
+		speechTick();
+	} else if (_roomCountdown <= 0) {
+		if (_clickRight)
+			rightClick();
+		if (_clickLeft)
+			leftClick(_mouse.x, _mouse.y);
+	}
+	_clickLeft = _clickRight = false;
+
+	if (_player.update(_speechTotal > 0))
+		dispatchPending();
+
+	applyScroll();
 	_dirty = true;
+}
+
+void HookEngine::edgeScroll() {
+	// 066B0: request 24 retraces of scrolling when Peter is near a view edge
+	if (_room.number() == 0x29)
+		return;
+	int sy = _player.feetY() - _scrollY;
+	if (sy >= _room.sword(0x2C))
+		_scrollRequest[3] = kScrollRequest;
+	else if (sy <= _room.sword(0x2A))
+		_scrollRequest[2] = kScrollRequest;
+	int sx = MAX(0, _player.actor.x - _scrollX);
+	if (sx >= _room.sword(0x26))
+		_scrollRequest[0] = kScrollRequest;
+	else if (sx <= _room.sword(0x28))
+		_scrollRequest[1] = kScrollRequest;
+}
+
+void HookEngine::applyScroll() {
+	// 03525 runs from the retrace interrupt: one pixel per retrace while a request lasts
+	if (_room.number() == 0x29)
+		return;
+	int maxX = _room.sword(0x1C) - kScreenWidth, maxY = (int)_room.sceneHeight() - kViewHeight;
+	for (int r = 0; r < kRetracesPerTick; r++) {
+		if (_scrollRequest[0] > 0) {
+			_scrollRequest[0]--;
+			if (_scrollX != maxX)
+				_scrollX++;
+		}
+		if (_scrollRequest[1] > 0) {
+			_scrollRequest[1]--;
+			if (_scrollX != kScrollLeftLimit)
+				_scrollX--;
+		}
+		if (_scrollRequest[2] > 0) {
+			_scrollRequest[2]--;
+			if (_scrollY != 0)
+				_scrollY--;
+		}
+		if (_scrollRequest[3] > 0) {
+			_scrollRequest[3]--;
+			if (_scrollY != maxY)
+				_scrollY++;
+		}
+	}
+}
+
+void HookEngine::checkExits() {
+	// 06AE0: exit zones (header +54: u16 n, n x {x, y, room, entry}), +-4 / +-3 around the feet
+	if (_roomCountdown >= 0)
+		return;
+	int fx = _player.feetX(), fy = _player.feetY();
+	uint16 list = _room.word(0x54);
+	for (uint i = 0; i < _room.word(list); i++) {
+		uint16 e = list + 2 + 8 * i;
+		int x = _room.sword(e), y = _room.sword(e + 2);
+		if (x - 4 <= fx && y - 3 <= fy && x + 4 >= fx && y + 3 >= fy) {
+			_roomCountdown = 1;
+			_nextRoom = _room.sword(e + 4);
+			_nextEntry = _room.sword(e + 6);
+			return;
+		}
+	}
+}
+
+void HookEngine::leftClick(int x, int y) {
+	if (y >= kViewHeight)
+		clickPanel(x, y - kViewHeight);
+	else
+		clickView(x + _scrollX + 1, y + _scrollY);
+}
+
+void HookEngine::rightClick() {
+	// 054F2: drop pending actions and swap the verb with the previous one
+	_pending = kPendingNone;
+	SWAP(_verb, _prevVerb);
+	if (_prevVerb && _verb)
+		_verb = 0;
+}
+
+void HookEngine::clickPanel(int x, int y) {
+	// 073DE: verb buttons; clicking the latched verb releases it
+	for (uint i = 0; i < 5; i++) {
+		uint16 b = kDsVerbButtons + 12 * i;
+		int x1 = (int16)dsWord(b), y1 = (int16)dsWord(b + 2), x2 = (int16)dsWord(b + 4), y2 = (int16)dsWord(b + 6);
+		if (x >= x1 && y >= y1 && x < x2 && y < y2) {
+			uint16 v = kVerbLatched | (i + 1);
+			_verb = (_verb == v) ? 0 : v;
+			_pending = kPendingNone;
+			return;
+		}
+	}
+	// inventory bar and arrows: milestone M4
+}
+
+void HookEngine::walkToHotspot(uint16 hs) {
+	int x, y;
+	_player.hotspotTarget(dsWord(hs + kHsWalkNode), x, y);
+	_player.walkTo(x, y);
+}
+
+void HookEngine::setPending(PendingType type, uint16 arg) {
+	_pending = type;
+	_pendingArg = arg;
+}
+
+void HookEngine::clickView(int cx, int cy) {
+	uint16 verb = _verb & 0xF;
+	uint16 hs = _hover;
+	if (verb) {
+		// 08800: a verb is used once; right-click brings it back
+		_prevVerb = _verb;
+		_verb = 0;
+	}
+
+	switch (verb) {
+	case kVerbLook: {
+		// 05A4C
+		if (hs && dsWord(hs + kHsLook)) {
+			setPending(kPendingLook, hs);
+			uint16 v = dsWord(hs + kHsLookVar) + 1;
+			setDsWord(hs + kHsLookVar, v > 3 ? 1 : v);
+			int x, y;
+			if (_player.hotspotTarget(dsWord(hs + kHsWalkNode), x, y) != 0) {
+				_player.walkTo(x, y);
+				return;
+			}
+		} else if (hs && dsWord(hs + kHsExitRoom)) {
+			walkToHotspot(hs);
+			return;
+		}
+		_fallbackLook = (_fallbackLook + 1) % 3;
+		setPending(kPendingMessage, kMsgLookFallback[_fallbackLook]);
+		_player.walkTo(_player.feetX(), _player.feetY());
+		return;
+	}
+	case kVerbTalk: {
+		// 05B1C (conversations themselves: M4)
+		if (!hs)
+			return;
+		uint16 talk = dsWord(hs + kHsTalk);
+		if (talk == 0) {
+			if (!dsWord(hs + kHsLook))
+				return;
+			setPending(kPendingMessage, kMsgTalkThat);
+		} else if ((talk & 0xFFF0) == 0x8000) {
+			setPending(kPendingMessage, (talk & 0xF) ? kMsgTalkBusy2 : kMsgTalkBusy);
+		}
+		walkToHotspot(hs);
+		return;
+	}
+	case kVerbPickUp: {
+		// 05BCB (taking an object: M4)
+		if (!hs)
+			return;
+		int16 pick = (int16)dsWord(hs + kHsPickUp);
+		if (pick == 0)
+			return;
+		if (pick < 0) {
+			if (!dsWord(hs + kHsLook))
+				return;
+			uint16 v = dsWord(hs + kHsLookVar) + 1;
+			setDsWord(hs + kHsLookVar, v > 3 ? 3 : v);
+			setPending(kPendingRefusal, (uint16)(-pick));
+		}
+		walkToHotspot(hs);
+		return;
+	}
+	case kVerbUse:
+		// 05C2F (USE logic: M4)
+		if (!hs) {
+			setPending(kPendingMessage, kMsgUseNothing);
+			_player.walkTo(_player.feetX(), _player.feetY());
+			return;
+		}
+		walkToHotspot(hs);
+		return;
+	case kVerbGive:
+		if (hs)
+			walkToHotspot(hs);
+		return;
+	default:
+		// 05D1D: no verb - walk to the hotspot's node or to the clicked point
+		_pending = kPendingNone;
+		if (hs)
+			walkToHotspot(hs);
+		else
+			_player.walkTo(cx, cy);
+		return;
+	}
+}
+
+void HookEngine::dispatchPending() {
+	// 07A77: message types 0 (hotspot LOOK), 2 (refusal), 4 (data-segment message)
+	PendingType type = _pending;
+	uint16 arg = _pendingArg;
+	_pending = kPendingNone;
+	switch (type) {
+	case kPendingLook: {
+		uint16 look = dsWord(arg + kHsLook), var = dsWord(arg + kHsLookVar);
+		if (!look || !var)
+			return;
+		uint16 variants = _room.word(0x80);
+		uint16 table = _room.word(variants + 4 * (var - 1));
+		uint16 msg = _room.word(table + 4 * (look - 1));
+		if (msg < _room.data().size())
+			say(readMessage(_room.data().data() + msg, _room.data().size() - msg), dsWord(arg + kHsFacing));
+		break;
+	}
+	case kPendingRefusal: {
+		uint16 msg = dsWord(kDsRefusals + 4 * (arg - 1));
+		say(readMessage(dsPtr(msg), _ds.size() - msg), _player.facing);
+		break;
+	}
+	case kPendingMessage:
+		say(readMessage(dsPtr(arg), _ds.size() - arg), kFacingDown);
+		break;
+	default:
+		break;
+	}
+}
+
+static int messageChars(const Common::Array<Common::String> &lines) {
+	int n = 0;
+	for (const Common::String &l : lines)
+		n += l.size();
+	return n;
+}
+
+void HookEngine::say(const Message &m, int facing) {
+	// 07B73: each part stays for (characters x 3) ticks; Peter animates his mouth meanwhile
+	if (m.empty())
+		return;
+	_speech = m;
+	_speechPart = 0;
+	_speechTotal = 0;
+	for (uint16 ref : m)
+		_speechTotal += messageChars(_lang.lines(ref)) * kTextTicksPerChar;
+	_speechTicks = messageChars(_lang.lines(m[0])) * kTextTicksPerChar;
+	_speechColour = _res.image()[kCsSpeakerColour + 0];	// speaker 0 = Peter: yellow
+	_player.facing = facing & 3;
+	_player.startTalking();
+	if (_speechTotal <= 0)
+		_speech.clear();
+}
+
+void HookEngine::speechTick() {
+	_speechTotal--;
+	_player.talkFrame(_speechTotal == 0);
+	if (--_speechTicks <= 0 && ++_speechPart < _speech.size())
+		_speechTicks = messageChars(_lang.lines(_speech[_speechPart])) * kTextTicksPerChar;
+	if (_speechTotal <= 0) {
+		_speechTotal = 0;
+		_speech.clear();
+	}
 }
 
 const SpriteBank *HookEngine::bankFor(int id) const {
@@ -207,7 +587,7 @@ void HookEngine::drawView() {
 		if (f)
 			items.push_back(Item{ &a, f, order, xOffset });
 	};
-	add(_peter, 0, kPeterXOffset);
+	add(_player.actor, 0, kPeterXOffset);
 	for (uint i = 0; i < _objects.size(); i++)
 		add(_objects[i], 6 + i, kObjectXOffset);
 	Common::sort(items.begin(), items.end(), [](const Item &p, const Item &q) {
@@ -217,6 +597,44 @@ void HookEngine::drawView() {
 	Graphics::Surface &s = *_screen->surfacePtr();
 	for (const Item &it : items)
 		SpriteBank::draw(s, *it.f, it.a->x - it.xOffset - _scrollX, it.a->y - _scrollY, view);
+	drawSpeech(view);
+}
+
+void HookEngine::drawSpeech(const Common::Rect &view) {
+	// 06BB1 / 06C0B: lines above Peter, centred on him, kept inside the view
+	if (_speech.empty() || _speechPart >= _speech.size())
+		return;
+	Common::Array<Common::String> lines = _lang.lines(_speech[_speechPart]);
+	if (lines.empty())
+		return;
+	int ax = _player.actor.x, bx = _player.actor.y;
+	if (_player.depth()) {
+		// 06BE8: in the depth region the text sits on the sprite's top edge, 4-aligned
+		const Frame *f = _peterBank.frame(_player.actor.frame);
+		bx += 0x30 - (f ? f->height : 0x30);
+		if ((bx & 3) == 3)
+			bx += 4;
+		bx &= ~3;
+	}
+	int maxW = 0;
+	for (const Common::String &l : lines)
+		maxW = MAX<int>(maxW, l.size() * Font::kWidth);
+	bx -= (int)lines.size() * Font::kHeight + 4;
+	if (bx < 0)
+		bx = 0;
+	int left = _scrollX + 0x11, right = _scrollX + 0x13E;
+	int x;
+	if (ax - maxW / 2 <= left)
+		x = left;
+	else if (ax + maxW / 2 >= right)
+		x = right - maxW;
+	else
+		x = ax - maxW / 2;
+	Graphics::Surface &s = *_screen->surfacePtr();
+	for (uint i = 0; i < lines.size(); i++) {
+		int lw = lines[i].size() * Font::kWidth;
+		_font.drawString(s, x + (maxW - lw) / 2 - _scrollX, bx + Font::kHeight * i - _scrollY, lines[i], _speechColour, view);
+	}
 }
 
 void HookEngine::drawPanel() {
@@ -227,10 +645,23 @@ void HookEngine::drawPanel() {
 		for (int x = 0; x < kScreenWidth; x++)
 			dst[x] = src[x] + 0xE0;
 	}
+	// The latched verb shows its pressed image from the lower half of the sheet.
+	if (_verb & kVerbLatched) {
+		uint16 b = kDsVerbButtons + 12 * ((_verb & 0xF) - 1);
+		int x1 = (int16)dsWord(b), y1 = (int16)dsWord(b + 2), x2 = (int16)dsWord(b + 4), y2 = (int16)dsWord(b + 6);
+		int sx = (int16)dsWord(b + 8), sy = (int16)dsWord(b + 10);
+		for (int y = 0; y < y2 - y1 && sy + y < 144; y++) {
+			byte *dst = (byte *)_screen->getBasePtr(x1, kViewHeight + y1 + y);
+			const byte *src = _panel.data() + (sy + y) * kScreenWidth + sx;
+			for (int x = 0; x < x2 - x1; x++)
+				dst[x] = src[x] + 0xE0;
+		}
+	}
 	// Inventory icons (722C): 6 slots from the scroll position, icon k = item k, opaque.
+	uint16 scroll = dsWord(kDsInventoryScroll);
 	for (int k = 0; k < kInventorySlots; k++) {
-		uint idx = _inventoryScroll + k;
-		uint16 item = idx < 16 ? _inventory[idx] : 0;
+		uint idx = scroll + k;
+		uint16 item = idx < 16 ? dsWord(kDsInventory + 2 * idx) : 0;
 		uint32 off = item * kIconWidth * kIconHeight;
 		if (!item || off + kIconWidth * kIconHeight > _icons.size())
 			continue;
@@ -251,27 +682,20 @@ void HookEngine::drawDebug() {
 						   _room.sword(rects + 8 * k + 4) - _scrollX + 1, _room.sword(rects + 8 * k + 6) - _scrollY + 1);
 			r.clip(Common::Rect(0, 0, kScreenWidth, kViewHeight));
 			if (r.isValidRect() && !r.isEmpty())
-				view.frameRect(r, 0xDF);
+				view.frameRect(r, hotspotRecord(k) == _hover ? 0xDE : 0xDF);
 		}
 	}
 	if (_showWalkGraph) {
-		// Header +06 graph count, +08/+0C/+10 tables of links / nodes / node counts.
-		const Buffer &d = _room.data();
-		uint16 n = _room.word(0x06);
-		for (uint g = 0; g < n; g++) {
-			uint32 links = READ_LE_UINT32(d.data() + READ_LE_UINT32(d.data() + 0x08) + 4 * g);
-			uint32 nodes = READ_LE_UINT32(d.data() + READ_LE_UINT32(d.data() + 0x0C) + 4 * g);
-			uint16 count = _room.word(READ_LE_UINT32(d.data() + 0x10) + 2 * g);
-			for (uint i = 0; i < count; i++) {
-				int x0 = _room.sword(nodes + 4 * i) - _scrollX, y0 = _room.sword(nodes + 4 * i + 2) - _scrollY;
-				for (uint j = 0; j < 8; j++) {
-					int16 to = _room.sword(links + 16 * i + 2 * j);
-					if (to <= 0 || to > (int)count)
-						continue;
-					int x1 = _room.sword(nodes + 4 * (to - 1)) - _scrollX, y1 = _room.sword(nodes + 4 * (to - 1) + 2) - _scrollY;
-					view.drawLine(CLIP(x0, 0, kScreenWidth - 1), CLIP(y0, 0, kViewHeight - 1),
-								  CLIP(x1, 0, kScreenWidth - 1), CLIP(y1, 0, kViewHeight - 1), g ? 0xDE : 0xDD);
-				}
+		const WalkGraph &g = _player.graph();
+		for (uint i = 1; i <= g.count(); i++) {
+			Common::Point a = g.node(i);
+			for (uint j = 0; j < 8; j++) {
+				uint16 to = g.link(i, j);
+				if (!to || to > g.count())
+					continue;
+				Common::Point b = g.node(to);
+				view.drawLine(CLIP<int>(a.x - _scrollX, 0, kScreenWidth - 1), CLIP<int>(a.y - _scrollY, 0, kViewHeight - 1),
+							  CLIP<int>(b.x - _scrollX, 0, kScreenWidth - 1), CLIP<int>(b.y - _scrollY, 0, kViewHeight - 1), 0xDD);
 			}
 		}
 	}
@@ -317,7 +741,41 @@ void HookEngine::handleKey(const Common::KeyState &key) {
 }
 
 Common::Error HookEngine::dumpFrames(const Common::Path &dir) {
+	// Optional scripted input for headless tests: "dump_clicks=x,y;x,y;..." clicks (screen
+	// coordinates) in room 0, each followed by "dump_ticks" ticks; a frame is written after each.
 	int ticks = ConfMan.hasKey("dump_ticks") ? ConfMan.getInt("dump_ticks") : 0;
+	auto write = [&](const Common::String &name) {
+		drawScreen();
+		byte pal[256 * 3];
+		_room.getPalette(_res, pal);
+		Common::DumpFile out;
+		Common::Path path = dir.appendComponent(name);
+		if (!out.open(path) || !Image::writePNG(out, *_screen->surfacePtr(), pal))
+			warning("Hook: cannot write %s", path.toString().c_str());
+	};
+	if (ConfMan.hasKey("dump_clicks")) {
+		enterRoom(ConfMan.hasKey("dump_room") ? ConfMan.getInt("dump_room") : 0, 0);
+		Common::StringTokenizer tok(ConfMan.get("dump_clicks"), ";");
+		int step = 0;
+		while (!tok.empty()) {
+			Common::String c = tok.nextToken();
+			int x = 0, y = 0, verb = 0;
+			sscanf(c.c_str(), "%d,%d,%d", &x, &y, &verb);
+			if (verb)
+				_verb = kVerbLatched | verb;
+			_mouse = Common::Point(x, y);
+			tick();
+			_clickLeft = true;
+			for (int t = 0; t < ticks; t++)
+				tick();
+			_dirty = true;
+			write(Common::String::format("step%02d.png", step++));
+			debug("step %d: room %u Peter %d,%d frame %d facing %d scroll %d,%d speech %d", step,
+				  _room.number(), _player.actor.x, _player.actor.y, _player.actor.frame, _player.facing,
+				  _scrollX, _scrollY, (int)_speech.size());
+		}
+		return Common::kNoError;
+	}
 	for (uint n = 0; n < Room::kNumRooms; n++) {
 		if (!enterRoom(n)) {
 			warning("Hook: room %u failed to load", n);
@@ -326,13 +784,7 @@ Common::Error HookEngine::dumpFrames(const Common::Path &dir) {
 		for (int t = 0; t < ticks; t++)
 			tick();
 		_dirty = true;
-		drawScreen();
-		byte pal[256 * 3];
-		_room.getPalette(_res, pal);
-		Common::DumpFile out;
-		Common::Path path = dir.appendComponent(Common::String::format("frame%02u.png", n));
-		if (!out.open(path) || !Image::writePNG(out, *_screen->surfacePtr(), pal))
-			warning("Hook: cannot write %s", path.toString().c_str());
+		write(Common::String::format("frame%02u.png", n));
 	}
 	return Common::kNoError;
 }

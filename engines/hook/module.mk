@@ -5,9 +5,12 @@ MODULE_OBJS = \
 	console.o \
 	hook.o \
 	metaengine.o \
+	player.o \
 	resources.o \
 	room.o \
-	sprites.o
+	sprites.o \
+	text.o \
+	walk.o
 
 # This module can be built as a plugin
 ifeq ($(ENABLE_HOOK), DYNAMIC_PLUGIN)
