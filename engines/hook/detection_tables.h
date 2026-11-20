@@ -27,13 +27,49 @@ const PlainGameDescriptor hookGames[] = {
 };
 
 const ADGameDescription gameDescriptions[] = {
+	// DOS, 3 x 720K floppies. HOOK.EXE = RNC-packed MZ executable + EJWLIB resource overlay.
+	// One release for five languages: the original picks the text file by the DOS country code.
 	{
-		// DOS, 3 x 720K floppies, multi-language (EN/FR/DE/ES/IT chosen by DOS country code).
-		// HOOK.EXE = RNC-packed MZ executable + EJWLIB resource overlay.
 		"hook",
 		nullptr,
 		AD_ENTRY1s("HOOK.EXE", "5f24b291ca2a99681dbbfce2963a232e", 1655151),
 		Common::EN_ANY,
+		Common::kPlatformDOS,
+		ADGF_UNSTABLE,
+		GUIO4(GUIO_NOSPEECH, GUIO_MIDIADLIB, GUIO_MIDIMT32, GUIO_MIDIGM)
+	},
+	{
+		"hook",
+		nullptr,
+		AD_ENTRY1s("HOOK.EXE", "5f24b291ca2a99681dbbfce2963a232e", 1655151),
+		Common::FR_FRA,
+		Common::kPlatformDOS,
+		ADGF_UNSTABLE,
+		GUIO4(GUIO_NOSPEECH, GUIO_MIDIADLIB, GUIO_MIDIMT32, GUIO_MIDIGM)
+	},
+	{
+		"hook",
+		nullptr,
+		AD_ENTRY1s("HOOK.EXE", "5f24b291ca2a99681dbbfce2963a232e", 1655151),
+		Common::DE_DEU,
+		Common::kPlatformDOS,
+		ADGF_UNSTABLE,
+		GUIO4(GUIO_NOSPEECH, GUIO_MIDIADLIB, GUIO_MIDIMT32, GUIO_MIDIGM)
+	},
+	{
+		"hook",
+		nullptr,
+		AD_ENTRY1s("HOOK.EXE", "5f24b291ca2a99681dbbfce2963a232e", 1655151),
+		Common::ES_ESP,
+		Common::kPlatformDOS,
+		ADGF_UNSTABLE,
+		GUIO4(GUIO_NOSPEECH, GUIO_MIDIADLIB, GUIO_MIDIMT32, GUIO_MIDIGM)
+	},
+	{
+		"hook",
+		nullptr,
+		AD_ENTRY1s("HOOK.EXE", "5f24b291ca2a99681dbbfce2963a232e", 1655151),
+		Common::IT_ITA,
 		Common::kPlatformDOS,
 		ADGF_UNSTABLE,
 		GUIO4(GUIO_NOSPEECH, GUIO_MIDIADLIB, GUIO_MIDIMT32, GUIO_MIDIGM)

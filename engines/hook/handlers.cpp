@@ -308,9 +308,7 @@ void HookEngine::roomEntryHook() {
 	case 39: {	// ported: AB9D. Peter is Pan: PANEL2, MOREPAN2, sequence 7775; the camp as in room 30
 		setDsWord(0x1A0A, 1);
 		// 0AC0B: the Pan panel (the inventory bar cache is reset; the bar is redrawn anyway)
-		Common::String panel((const char *)dsPtr(0x50E));
-		if (!_res.load(panel.c_str(), _panel) || _panel.size() < (uint)kScreenWidth * kPanelHeight)
-			warning("Hook: cannot load %s", panel.c_str());
+		loadPanel((const char *)dsPtr(0x50E));
 		loadPeterBank(0x2CC);		// MOREPAN2.BIN, but [86EF] names MOREPAN1 (sic)
 		setDsWord(0x86EF, 0x2BF);
 		startSequence(0x7775);
@@ -1337,11 +1335,10 @@ void HookEngine::runHandler(uint16 address) {
 	case 0x9370:	// 858D tick 42
 		_player.actor.frame = 0x11;
 		return;
-	case 0x9377:	// 858D tick 96: the end. The original restarts at the title screen (000B2),
-		// which is not ported yet
+	case 0x9377:	// 858D tick 96: the end; the main loop goes on with the end credits (000B2)
 		debugC(1, kDebugScript, "the end");
 		abortSequences();
-		quitGame();
+		endGame();
 		return;
 
 	case 0x9EC3:	// exercise done: flag 16 + 1, flag 26 - 1, graph of node 14

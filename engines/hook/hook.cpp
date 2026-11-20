@@ -34,6 +34,7 @@
 
 #include "hook/console.h"
 #include "hook/hook.h"
+#include "hook/intro.h"
 #include "hook/music.h"
 
 namespace Hook {
@@ -48,7 +49,8 @@ static const uint16 kDsInventoryScroll = 0x8705;
 static const uint16 kDsVerbButtons = 0x0D40;	// 5 x {x1, y1, x2, y2, src x, src y}, panel coords
 static const uint16 kDsRefusals = 0x4016;		// PICK UP refusals: far ptrs, index -pickup - 1
 static const uint16 kCsSpeakerColour = 0x6E5C;	// code segment: text colour per speaker (DB, DA, C1, DE)
-static const uint16 kDsCursor = 0x0575;			// 12x24 pointer, planar, values 1..3 (+0xDC)
+static const uint16 kDsCursor = 0x0575;
+static const uint16 kDsOptions = 0xCE9B;		// load/save panel: 1 = requested, 3 = shown			// 12x24 pointer, planar, values 1..3 (+0xDC)
 
 // Stock replies (data-segment messages)
 static const uint16 kMsgUseNothing = 0xAD98;	// USE without hotspot
@@ -113,41 +115,150 @@ Common::Error HookEngine::run() {
 		return dumpMusic(Common::Path(ConfMan.get("dump_frames"), '/'));
 	if (ConfMan.hasKey("dump_frames"))
 		return dumpFrames(Common::Path(ConfMan.get("dump_frames"), '/'));
+	if (ConfMan.hasKey("dump_intro")) {
+		// the intro and title once, then the end credits, as PNGs every dump_every flips
+		initSound();
+		Intro intro(this, _screen);
+		intro.setDump(Common::Path(ConfMan.get("dump_intro"), '/'), ConfMan.hasKey("dump_every") ? ConfMan.getInt("dump_every") : 10);
+		intro.run();
+		intro.credits(true);
+		return Common::kNoError;
+	}
 
 	initSound();
-	// New game: room [86F7] = 0, entry [86F9] = 0 (001A9: the music is stopped first)
-	playSong(0xFF);
-	if (!enterRoom(0, 0))
-		return Common::Error(Common::kReadingFailed, "LOCAT00.BIN");
 	setCursor();
-	CursorMan.showMouse(true);
+
+	// A save chosen in the launcher skips the intro; otherwise the intro and title (0000),
+	// then a new game
+	bool loaded = false;
+	if (ConfMan.hasKey("save_slot")) {
+		_inGame = true;
+		loaded = loadGameState(ConfMan.getInt("save_slot")).getCode() == Common::kNoError;
+	}
+	if (!loaded) {
+		if (!runIntro())
+			return Common::kNoError;
+		newGame();
+	}
 
 	Graphics::FrameLimiter limiter(g_system, kTicksPerSecond);
 	Common::Event e;
 	while (!shouldQuit()) {
-		while (g_system->getEventManager()->pollEvent(e))
-			handleEvent(e);
-		tick();
-		drawScreen();
-		limiter.delayBeforeSwap();
-		_screen->update();
-		limiter.startFrame();
+		CursorMan.showMouse(true);
+		while (!shouldQuit() && !_gameEnded) {
+			while (g_system->getEventManager()->pollEvent(e))
+				handleEvent(e);
+			tick();
+			drawScreen();
+			limiter.delayBeforeSwap();
+			_screen->update();
+			limiter.startFrame();
+		}
+		if (!_gameEnded)
+			break;
+		// 000B2: after the ending, the end credits, then the intro and title again. The
+		// original restarts without resetting the game state; here a click starts a new game.
+		_gameEnded = false;
+		_inGame = false;
+		CursorMan.showMouse(false);
+		Intro intro(this, _screen);
+		Intro::Result r = intro.credits(true);
+		if (r == Intro::kDone)
+			r = intro.run();
+		if (r == Intro::kQuit)
+			break;
+		newGame();
 	}
 	return Common::kNoError;
 }
 
-bool HookEngine::loadGlobals() {
+bool HookEngine::runIntro() {
+	_inGame = false;
+	CursorMan.showMouse(false);
+	Intro intro(this, _screen);
+	return intro.run() != Intro::kQuit;
+}
+
+void HookEngine::newGame() {
+	// ported: 028C. Room [86F7] = 0, entry [86F9] = 0 (001A9 stopped the music)
+	resetGame();
+	setTotalPlayTime(0);
+	playSong(0xFF);
+	enterRoom(0, 0);
+	_inGame = true;
+}
+
+void HookEngine::resetGame() {
 	const byte *ds = _res.ds(0);
 	_ds = Buffer(ds, _res.image().size() - Resources::kDataSegment);
+	loadPeterBank(0x02B2);	// PANSPRIT.BIN, its name in [86EF] (0C193)
+	loadPanel("PANEL.BIN");
+	// Actors 1..5 (Tinkerbell's trail) start as in the data segment
+	for (int i = 1; i < 6; i++) {
+		uint16 slot = 0x13FA + 22 * i;
+		_actors[i] = Actor();
+		_actors[i].bank = kBankTinker;
+		_actors[i].frame = (int16)_res.dsWord(slot + 4);
+		_actors[i].x = (int16)_res.dsWord(slot + 6);
+		_actors[i].y = (int16)_res.dsWord(slot + 0xA);
+	}
+	_player.facing = kFacingDown;
+	resetTransient();
+}
 
-	Buffer pan;
-	if (!_res.load("PANSPRIT.BIN", pan) || !_peterBank.load(pan.data(), pan.size(), _res.ds(kXlatPeter)))
+void HookEngine::resetTransient() {
+	_verb = _prevVerb = 0;
+	_hover = 0;
+	_pending = kPendingNone;
+	_itemSelected = false;
+	_itemX = 0;
+	_arrowTimer = 0;
+	_pickupHotspot = 0;
+	_pickupTimer = 0;
+	_lookEvent = 0;
+	_seqAbort = false;
+	_convActive = false;
+	_convReply = false;
+	_convPause = 0;
+	_giveHotspot = 0;
+	_giveTimer = 0;
+	_speech.clear();
+	_speechTicks = _speechTotal = 0;
+	_modal = kModalNone;
+	_sceneFade = false;
+	_fadeDir = 0;
+	_clickLeft = _clickRight = false;
+	for (uint16 v : { 0xABC9, 0xAC13, 0xAC15, 0xCE9B })
+		setDsWord(v, 0);
+}
+
+bool HookEngine::loadPanel(const char *name) {
+	if (!_res.load(name, _panel) || _panel.size() < (uint)kScreenWidth * kPanelHeight) {
+		warning("Hook: cannot load %s", name);
 		return false;
-	if (!_res.load("PANEL.BIN", _panel) || _panel.size() < (uint)kScreenWidth * kPanelHeight)
-		return false;
+	}
+	_panelName = name;
+	_dirty = true;
+	return true;
+}
+
+bool HookEngine::loadGlobals() {
+
 	if (!_res.load("INVENTRY.BIN", _icons))
 		return false;
-	if (!_lang.load(_res, "ENGLISH.BIN"))
+	// 0001D: the language file (the original picks it by the DOS country code)
+	static const struct {
+		Common::Language lang;
+		const char *file;
+	} languages[] = {
+		{ Common::FR_FRA, "FRENCH.BIN" }, { Common::DE_DEU, "GERMAN.BIN" },
+		{ Common::ES_ESP, "SPANISH.BIN" }, { Common::IT_ITA, "ITALIAN.BIN" }
+	};
+	const char *langFile = "ENGLISH.BIN";
+	for (const auto &l : languages)
+		if (_gameDescription->language == l.lang)
+			langFile = l.file;
+	if (!_lang.load(_res, langFile))
 		return false;
 	Buffer arrows;
 	if (!_res.load("ARROWS.BIN", arrows) || !_arrowsBank.load(arrows.data(), arrows.size(), _res.ds(kXlatArrows)))
@@ -155,17 +266,9 @@ bool HookEngine::loadGlobals() {
 	Buffer tinker;
 	if (!_res.load("TINKER.BIN", tinker) || !_tinkerBank.load(tinker.data(), tinker.size(), _res.ds(kXlatTinker)))
 		return false;
-	// Actors 1..5 (Tinkerbell's trail) start as in the data segment
-	for (int i = 1; i < 6; i++) {
-		uint16 slot = 0x13FA + 22 * i;
-		_actors[i].bank = kBankTinker;
-		_actors[i].frame = (int16)_res.dsWord(slot + 4);
-		_actors[i].x = (int16)_res.dsWord(slot + 6);
-		_actors[i].y = (int16)_res.dsWord(slot + 0xA);
-	}
 	_font.load(_res);
-	_player.facing = kFacingDown;
-	return true;
+	resetGame();
+	return !_panel.empty() && _peterBank.size();
 }
 
 bool HookEngine::enterRoom(uint number, uint entry) {
@@ -327,6 +430,7 @@ void HookEngine::tick() {
 
 	arrowTick();
 	_selectAnim = (_selectAnim + 1) & 3;
+	optionsTick();	// 0C398
 	bool talking = _speechTotal > 0;
 	if (talking) {
 		speechTick();
@@ -369,7 +473,8 @@ void HookEngine::tick() {
 			_itemX = 0;
 			_clickLeft = _clickRight = false;
 		}
-		if (_speechTotal == 0 && _roomCountdown <= 0) {
+		// 054DD: no clicks while the load/save panel is up
+		if (_speechTotal == 0 && _roomCountdown <= 0 && !dsWord(kDsOptions)) {
 			if (_clickRight)
 				rightClick();
 			if (_clickLeft)
@@ -851,6 +956,9 @@ void HookEngine::drawPanel() {
 				dst[x] = src[x] + 0xE0;
 		}
 	}
+	// 06EEE: the load/save panel has no inventory, arrows or selection box
+	if (dsWord(kDsOptions))
+		return;
 	// Inventory icons (722C): 6 slots from DS:8709 + scroll (the outer two sit under the
 	// arrows), icon k = item k, opaque.
 	for (int k = 0; k < kInventorySlots; k++) {

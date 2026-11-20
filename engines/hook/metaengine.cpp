@@ -33,7 +33,7 @@ Common::Error HookMetaEngine::createInstance(OSystem *syst, Engine **engine, con
 }
 
 bool HookMetaEngine::hasFeature(MetaEngineFeature f) const {
-	return false;
+	return checkExtendedSaves(f) || f == kSupportsLoadingDuringStartup;
 }
 
 #if PLUGIN_ENABLED_DYNAMIC(HOOK)

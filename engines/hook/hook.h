@@ -44,11 +44,11 @@ class MusicDriver;
 /**
  * Engine for Hook (Ocean / Shadow Software, 1992, DOS).
  *
- * Status: milestone M4 (game logic). Verbs, inventory, conversations, GIVE, action sequences
- * and the hand-ported routines of all rooms (handlers.cpp, docs/logic-ledger.md) are in,
- * including Tinkerbell's hints, the flashback and the finale, and the sound (M5: AdLib and
- * MT-32/GM music and effects, music.cpp / sound.cpp). Saves (M6) and the title screen /
- * credits are still to come.
+ * Status: milestone M6. Verbs, inventory, conversations, GIVE, action sequences and the
+ * hand-ported routines of all rooms (handlers.cpp, docs/logic-ledger.md), Tinkerbell's hints,
+ * the flashback and the finale (M4); AdLib and MT-32/GM music and effects (M5, music.cpp /
+ * sound.cpp); the intro, the title and end credits (intro.cpp), the in-game load/save panel
+ * and ScummVM saves (saveload.cpp), all five languages (M6).
  * Keys: arrows scroll, PgUp/PgDn change room. Console: room, scroll, peter, hotspots,
  * walk, res.
  */
@@ -65,8 +65,17 @@ public:
 	~HookEngine() override;
 
 	bool hasFeature(EngineFeature f) const override {
-		return f == kSupportsReturnToLauncher;
+		return f == kSupportsReturnToLauncher || f == kSupportsLoadingDuringRuntime ||
+			   f == kSupportsSavingDuringRuntime;
 	}
+
+	// saveload.cpp
+	bool canLoadGameStateCurrently(Common::U32String *msg = nullptr) override;
+	bool canSaveGameStateCurrently(Common::U32String *msg = nullptr) override;
+	Common::Error loadGameStream(Common::SeekableReadStream *stream) override;
+	Common::Error saveGameStream(Common::WriteStream *stream, bool isAutosave = false) override;
+	/** 09377: the end of the game; the main loop runs the end credits and the intro. */
+	void endGame() { _gameEnded = true; }
 
 	const Resources &resources() const { return _res; }
 	const Room &room() const { return _room; }
@@ -186,6 +195,14 @@ public:
 private:
 
 	bool loadGlobals();
+	void resetGame();				///< the EXE's initial game state (no room yet)
+	void newGame();					///< 0028C: room 0, entry 0
+	void resetTransient();			///< what a load or a new game drops (no DS state)
+	bool loadPanel(const char *name);
+	bool runIntro();				///< 001A9 until a click; false = quit
+	// saveload.cpp: the load/save panel (0C398, opened by USE on the save disk, 08C18)
+	void optionsTick();
+	void closeOptions();
 	void applyObjectState();
 	void tick();
 	void handleEvent(const Common::Event &e);
@@ -237,6 +254,10 @@ private:
 	Common::Array<Actor> _objects;	///< room objects (original DS:147E)
 
 	Buffer _panel;					///< PANEL.BIN: 320x144 sheet, colours 0..31 (+0xE0)
+	Common::String _panelName;		///< PANEL.BIN, PANEL2.BIN or PANEL3.BIN (load/save)
+	Common::String _optionsReturn;	///< the panel to restore when the load/save panel closes
+	bool _inGame = false;			///< not in the intro or credits (loading and saving allowed)
+	bool _gameEnded = false;
 	Buffer _icons;					///< INVENTRY.BIN: 38 icons of 32x24
 
 	uint16 _verb = 0;				///< [0E60]: 0 or 0x8000 | 1..5 (LOOK, TALK, PICK UP, USE, GIVE)

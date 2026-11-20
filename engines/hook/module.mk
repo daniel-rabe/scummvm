@@ -4,14 +4,17 @@ MODULE_OBJS = \
 	anim.o \
 	console.o \
 	conversation.o \
+	fli.o \
 	handlers.o \
 	hook.o \
+	intro.o \
 	logic.o \
 	metaengine.o \
 	music.o \
 	player.o \
 	resources.o \
 	room.o \
+	saveload.o \
 	sequence.o \
 	sound.o \
 	sprites.o \
