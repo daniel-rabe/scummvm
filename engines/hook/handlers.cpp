@@ -472,9 +472,14 @@ void HookEngine::modalTick() {
 			fadeStep();
 		return;
 	}
-	// 099D2: 65 frames with a frame delay of one retrace ([cs:3482] = 1): Peter rises 5 px and
-	// the view 2 px a frame (down to y = 16); 20 frames before the end the screen fades out
+	// 099D2: 65 frames with a frame delay of 1 ([cs:3482] = 1, so two retraces a frame through
+	// 0B61): Peter rises 5 px and the view 2 px a frame (down to y = 16); 20 frames before the
+	// end the screen fades out (one step a retrace)
 	for (int r = 0; r < kRetracesPerTick && _modal == kModalFlyUp; r++) {
+		if (r % 2 == 0) {
+			fadeStep();
+			continue;
+		}
 		_player.actor.y -= 5;
 		if (_scrollY >= 0x10)
 			_scrollY -= 2;

@@ -137,9 +137,9 @@ void HookEngine::importOriginalSaves() {
 		out->writeByte(kSaveVersion);
 		out->writeUint16LE(kSaveSize);
 		out->write(data, kSaveSize);
-		// play time: the 32-bit tick counter [86FD], 14 ticks a second
+		// play time: the 32-bit tick counter [86FD]
 		uint32 ticks = READ_LE_UINT32(data + 0x86FD - kDsSave);
-		getMetaEngine()->appendExtendedSave(out, (uint32)((uint64)ticks * 1000 / kTicksPerSecond),
+		getMetaEngine()->appendExtendedSave(out, (uint32)((uint64)ticks * kRetracesPerTick * 1000 / kRetraceHz),
 											Common::String::format("HOOK.SAV slot %d", slot), false);
 		out->finalize();
 		delete out;

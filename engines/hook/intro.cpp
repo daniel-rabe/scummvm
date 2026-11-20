@@ -37,7 +37,6 @@ namespace Hook {
 
 static const int kW = FliDecoder::kWidth;
 static const int kH = FliDecoder::kHeight;
-static const int kRetraceHz = 70;
 
 static const uint16 kDsPlaylist = 0xB24D;		// the intro playlist
 static const uint16 kDsCues = 0xB63D;			// {u16 scene, u16 frame, u16 song, u16 effect}, FFFD = none
@@ -91,7 +90,7 @@ bool Intro::retrace() {
 	_retraces++;
 	if (_dumpEvery)
 		return !_quit;
-	uint32 due = _clock + _retraces * 1000 / kRetraceHz, now = g_system->getMillis();
+	uint32 due = _clock + _retraces * 1000 / HookEngine::kRetraceHz, now = g_system->getMillis();
 	if (now + 1000 < due || now > due + 250) {
 		// paused (the main menu) or a clock jump: start counting again
 		_clock = now;
@@ -109,8 +108,13 @@ bool Intro::wait(int retraces) {
 	return true;
 }
 
+bool Intro::waitFrame() {
+	// 0B61: until the retrace counter reaches the delay, then the flip on the next retrace
+	return wait(_delay + 1);
+}
+
 bool Intro::tick() {
-	bool ok = wait(_delay);
+	bool ok = waitFrame();
 	flip();
 	return ok;
 }
@@ -326,7 +330,7 @@ void Intro::still(const Common::String &name, bool hold) {
 	startFadeOut();
 	if (!waitFade())
 		return;
-	if (!wait(_delay) || !loadVga(name, true))
+	if (!waitFrame() || !loadVga(name, true))
 		return;
 	flip();
 	startFadeIn();
@@ -354,7 +358,7 @@ void Intro::startScroll(const Common::String &name) {
 		return;
 	}
 	debugC(1, kDebugScript, "intro: scroll %s", name.c_str());
-	if (!wait(_delay))
+	if (!waitFrame())
 		return;
 	_scrollY = 0;
 	drawScroll();
@@ -383,7 +387,7 @@ void Intro::scrollStep() {
 	if (!waitFade())
 		return;
 	_scrollY = 0;
-	wait(_delay);
+	waitFrame();
 }
 
 // --- the credits ---
@@ -403,7 +407,7 @@ Intro::Result Intro::credits(bool ending) {
 		startFadeOut();
 		waitFade();
 		_screen->clear(0);
-		if (!wait(_delay) || !loadVga("DECK4.VGA", true))
+		if (!waitFrame() || !loadVga("DECK4.VGA", true))
 			return result();
 		const byte *panel = _vm->resources().ds(kDsPanelColours);
 		for (int i = 0; i < 0x20 * 3; i++)

@@ -27,7 +27,6 @@
 #include "common/system.h"
 #include "engines/util.h"
 #include "graphics/cursorman.h"
-#include "graphics/framelimiter.h"
 #include "graphics/paletteman.h"
 
 #include "hook/console.h"
@@ -128,18 +127,24 @@ Common::Error HookEngine::run() {
 		newGame();
 	}
 
-	Graphics::FrameLimiter limiter(g_system, kTicksPerSecond);
 	Common::Event e;
 	while (!shouldQuit()) {
 		CursorMan.showMouse(true);
+		uint32 clock = g_system->getMillis(), ticks = 0;
 		while (!shouldQuit() && !_gameEnded) {
 			while (g_system->getEventManager()->pollEvent(e))
 				handleEvent(e);
 			tick();
 			drawScreen();
-			limiter.delayBeforeSwap();
 			_screen->update();
-			limiter.startFrame();
+			// kRetracesPerTick retraces of 1/70 s a tick (not a whole number of milliseconds)
+			uint32 due = clock + ++ticks * kRetracesPerTick * 1000 / kRetraceHz, now = g_system->getMillis();
+			if (now + 1000 < due || now > due + 250) {
+				clock = now;	// paused (the main menu) or a clock jump: start counting again
+				ticks = 0;
+			} else if (now < due) {
+				g_system->delayMillis(due - now);
+			}
 		}
 		if (!_gameEnded)
 			break;

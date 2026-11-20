@@ -58,8 +58,13 @@ public:
 	static const int kScreenHeight = 200;
 	static const int kViewHeight = 128;		///< split screen: view rows 0..127
 	static const int kPanelHeight = 72;		///< panel rows 128..199
-	static const int kTicksPerSecond = 14;	///< 70 Hz retrace / frame delay 5 (0B61)
-	static const int kRetracesPerTick = 5;
+	static const int kRetraceHz = 70;
+	/**
+	 * A game tick: frame delay 5 through 0B61, which waits until the retrace counter reaches the
+	 * delay, flips on the next retrace and only then clears the counter, so delay + 1 retraces
+	 * (11.7 ticks a second; measured in DOSBox too).
+	 */
+	static const int kRetracesPerTick = 6;
 
 	HookEngine(OSystem *syst, const ADGameDescription *gameDesc);
 	~HookEngine() override;

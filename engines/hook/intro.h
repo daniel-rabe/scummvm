@@ -37,7 +37,7 @@ class HookEngine;
 /**
  * The full-screen parts (docs/formats.md "Boot and intro"): the intro playlist (B9D0) with its
  * effect cues (B693), and the title credits (B6C3). Everything is paced by the 70 Hz retrace
- * like the original: a playlist tick lasts `delay` retraces (cs:3482), fades step once per
+ * like the original: a playlist tick lasts `delay` + 1 retraces (cs:3482, 0B61), fades step once per
  * retrace (00B98 / 00BEB, 32 steps).
  */
 class Intro {
@@ -59,6 +59,7 @@ private:
 	// timing and output
 	bool retrace();					///< one retrace: input, fade step, present; false = stop
 	bool wait(int retraces);
+	bool waitFrame();				///< 0B61: _delay + 1 retraces
 	bool tick();					///< 00B61 + flip: the frame delay, then show the back buffer
 	bool waitFade();				///< 00C4E loop: until the running fade is done
 	void startFadeOut();
