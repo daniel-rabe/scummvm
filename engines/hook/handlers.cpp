@@ -222,8 +222,9 @@ uint16 HookEngine::hotspotBase() const {
 }
 
 void HookEngine::roomEntryHook() {
-	// 0ACBB: per-room code once the room is set up (cs:ACDA). The ambient sound calls
-	// (0AFF0 / 0B001 / 0B034) belong to M5.
+	// 0ACBB: the room's song and ambient reset, then per-room code (cs:ACDA). The ambient
+	// calls of rooms 1..9 (0AFF0 / 0B001 -> 0B034) do nothing.
+	roomSound();
 	switch (_room.number()) {
 	case 0:		// ported: AD82. The hat comes back to the passer-by's script switch
 		if (dsWord(flag(4)) == 2)
@@ -418,8 +419,9 @@ bool HookEngine::tinkerHit(int cx, int cy) const {
 }
 
 void HookEngine::tinkerTalk(int cx, int cy) {
-	// ported: 880F. TALK to Tinkerbell (the sound 0B02C belongs to M5). She answers through the
+	// ported: 880F. TALK to Tinkerbell: her chime (0B02C), then she answers through the
 	// temporary conversation at DS:A997 with her line in [A9BD] and the bubble at [A9AB]/[A9AD].
+	playEffect(1);
 	if (_room.number() == 0x26) {
 		// room 38: the three clues found (flags 10, 11, 12) start the flashback, sequence 7283
 		setDsWord(0xA9AB, 0x10C);
@@ -1236,7 +1238,8 @@ void HookEngine::runHandler(uint16 address) {
 		setDsWord(kDsWalkThrough, 1);
 		_player.facing = _player.actor.x <= 0xED ? 1 : 0;
 		return;
-	case 0x9818:	// 7283 tick 110: sound effect 6 (M5)
+	case 0x9818:	// ported: 9818. 7283 tick 110: song 6
+		playSong(6);
 		return;
 	case 0x984C:	// 7283 tick 160: item 28
 		addItem(0x1C);

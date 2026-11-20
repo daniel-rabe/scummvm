@@ -8,10 +8,12 @@ MODULE_OBJS = \
 	hook.o \
 	logic.o \
 	metaengine.o \
+	music.o \
 	player.o \
 	resources.o \
 	room.o \
 	sequence.o \
+	sound.o \
 	sprites.o \
 	text.o \
 	walk.o

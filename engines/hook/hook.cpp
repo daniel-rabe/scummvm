@@ -34,6 +34,7 @@
 
 #include "hook/console.h"
 #include "hook/hook.h"
+#include "hook/music.h"
 
 namespace Hook {
 
@@ -83,6 +84,7 @@ HookEngine::HookEngine(OSystem *syst, const ADGameDescription *gameDesc) : Engin
 }
 
 HookEngine::~HookEngine() {
+	delete _music;
 	delete _screen;
 }
 
@@ -107,10 +109,14 @@ Common::Error HookEngine::run() {
 
 	// Development aid (remove before upstreaming): with "dump_frames=<dir>" in the game's
 	// config section, write one composed screen per room as PNG and quit.
+	if (ConfMan.hasKey("dump_frames") && (ConfMan.hasKey("dump_song") || ConfMan.hasKey("dump_fx")))
+		return dumpMusic(Common::Path(ConfMan.get("dump_frames"), '/'));
 	if (ConfMan.hasKey("dump_frames"))
 		return dumpFrames(Common::Path(ConfMan.get("dump_frames"), '/'));
 
-	// New game: room [86F7] = 0, entry [86F9] = 0
+	initSound();
+	// New game: room [86F7] = 0, entry [86F9] = 0 (001A9: the music is stopped first)
+	playSong(0xFF);
 	if (!enterRoom(0, 0))
 		return Common::Error(Common::kReadingFailed, "LOCAT00.BIN");
 	setCursor();
@@ -375,6 +381,7 @@ void HookEngine::tick() {
 	}
 
 	sequencesTick();
+	soundTick();	// A813
 	roomHookTick();
 	tinkerTick();
 
@@ -458,6 +465,7 @@ void HookEngine::leftClick(int x, int y) {
 void HookEngine::rightClick() {
 	// 054F2: drop pending actions and swap the verb with the previous one
 	_pending = kPendingNone;
+	playEffect(0);	// 05507
 	SWAP(_verb, _prevVerb);
 	if (_prevVerb && _verb)
 		_verb = 0;
@@ -470,6 +478,7 @@ void HookEngine::clickPanel(int x, int y) {
 		int x1 = (int16)dsWord(b), y1 = (int16)dsWord(b + 2), x2 = (int16)dsWord(b + 4), y2 = (int16)dsWord(b + 6);
 		if (x >= x1 && y >= y1 && x < x2 && y < y2) {
 			uint16 v = kVerbLatched | (i + 1);
+			playEffect(0);	// 07454
 			_verb = (_verb == v) ? 0 : v;
 			_pending = kPendingNone;
 			return;
@@ -500,7 +509,13 @@ void HookEngine::clickView(int cx, int cy) {
 
 	switch (verb) {
 	case kVerbLook: {
-		// 05A4C
+		// 05A4C: Tinkerbell first (05AFA: her chime and Peter's line)
+		if (tinkerHit(cx, cy)) {
+			playEffect(1);
+			setPending(kPendingMessage, 0xADEC);
+			_player.walkTo(_player.feetX(), _player.feetY());
+			return;
+		}
 		if (hs && dsWord(hs + kHsLook)) {
 			setPending(kPendingLook, hs);
 			uint16 v = dsWord(hs + kHsLookVar) + 1;

@@ -39,13 +39,16 @@
 
 namespace Hook {
 
+class MusicDriver;
+
 /**
  * Engine for Hook (Ocean / Shadow Software, 1992, DOS).
  *
  * Status: milestone M4 (game logic). Verbs, inventory, conversations, GIVE, action sequences
  * and the hand-ported routines of all rooms (handlers.cpp, docs/logic-ledger.md) are in,
- * including Tinkerbell's hints, the flashback and the finale. Sound (M5), saves (M6) and the
- * title screen / credits are still to come.
+ * including Tinkerbell's hints, the flashback and the finale, and the sound (M5: AdLib and
+ * MT-32/GM music and effects, music.cpp / sound.cpp). Saves (M6) and the title screen /
+ * credits are still to come.
  * Keys: arrows scroll, PgUp/PgDn change room. Console: room, scroll, peter, hotspots,
  * walk, res.
  */
@@ -83,6 +86,12 @@ public:
 	bool _showHotspots = false;
 	bool _showWalkGraph = false;
 	void redraw() { _dirty = true; }
+
+	// sound.cpp
+	void playSong(uint8 n);
+	void playEffect(uint8 n);
+	void playRoomSound(uint16 offset, int volume);
+	void syncSoundSettings() override;
 
 protected:
 	Common::Error run() override;
@@ -207,10 +216,16 @@ private:
 	void handleKey(const Common::KeyState &key);
 	void setCursor();
 	Common::Error dumpFrames(const Common::Path &dir);
+	Common::Error dumpMusic(const Common::Path &dir);
+	void initSound();
+	void roomSound();
+	void soundTick();
+	void ambientTick();
 
 	const ADGameDescription *_gameDescription;
 	Graphics::Screen *_screen = nullptr;
 	Resources _res;
+	MusicDriver *_music = nullptr;
 	Buffer _ds;
 	Room _room;
 	AnimVM _anim;

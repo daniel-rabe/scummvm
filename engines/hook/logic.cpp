@@ -102,6 +102,7 @@ void HookEngine::clickInventory(int x, int y) {
 	// Arrows (0703D): left at panel (64..88, 44..68), right at (238..262, 44..68)
 	if (y >= 44 && y <= 68) {
 		if (x >= 64 && x <= 88) {
+			playEffect(0);	// 070AE
 			if (dsWord(kDsInventoryScroll) > 0) {
 				setDsWord(kDsInventoryScroll, dsWord(kDsInventoryScroll) - 1);
 				if (_itemSelected)
@@ -112,6 +113,7 @@ void HookEngine::clickInventory(int x, int y) {
 			return;
 		}
 		if (x >= 238 && x <= 262) {
+			playEffect(0);	// 0711A
 			if (dsWord(kDsInventoryScroll) != dsWord(kDsInventoryMax)) {
 				setDsWord(kDsInventoryScroll, dsWord(kDsInventoryScroll) + 1);
 				if (_itemSelected)
@@ -128,6 +130,8 @@ void HookEngine::clickInventory(int x, int y) {
 	if (_player.isWalking())
 		return;
 	uint16 verb = _verb & 0xF;
+	if (verb)
+		playEffect(0);	// 0573E
 	int slot = (x - 96) / 32 + 1;
 	uint16 item = barItem(slot);
 	switch (verb) {

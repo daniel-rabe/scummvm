@@ -305,7 +305,9 @@ void Player::stop() {
 		_idlePos = 0;
 	uint16 e = kDsIdleList + 6 * _idlePos;
 	actor.frame = (int16)_vm->dsWord(e);
-	// _vm->dsWord(e + 2): sound effect of the fidget (sound is milestone M5)
+	// 05E4B: the fidget's room sound at volume 48h
+	if (uint16 s = _vm->dsWord(e + 2))
+		_vm->playRoomSound(s, 0x48);
 	_idleDelay = (int16)_vm->dsWord(e + 4);
 	_idlePos++;
 }
