@@ -42,10 +42,24 @@ Common::Array<Common::String> Language::lines(uint16 ref) const {
 	uint count = _data[p++];
 	for (uint i = 0; i < count && p < _data.size(); i++) {
 		Common::String line;
-		while (p < _data.size() && _data[p])
-			line += (char)_data[p++];
+		bool cut = false;
+		for (; p < _data.size() && _data[p]; p++) {
+			byte c = _data[p];
+			if (c < 0x20) {
+				// FRENCH 136, SPANISH 8: the next string (count byte included) ran into this
+				// one. The original draws code bytes as glyphs; the message ends here instead.
+				cut = true;
+				break;
+			}
+			if (c == 0xE1)
+				line += "SS";	// GERMAN: CP437 sharp s has no glyph (the original draws code bytes)
+			else
+				line += (char)c;
+		}
 		p++;
 		out.push_back(line);
+		if (cut)
+			break;
 	}
 	return out;
 }
@@ -75,7 +89,8 @@ const byte *Font::glyph(byte c) const {
 	return _glyphs + 64 * (c - 0x20);
 }
 
-void Font::drawString(Graphics::Surface &dst, int x, int y, const Common::String &s, byte colour, const Common::Rect &clip) const {
+void Font::drawString(Graphics::Surface &dst, int x, int y, const Common::String &s, byte colour,
+					  const Common::Rect &clip) const {
 	for (uint i = 0; i < s.size(); i++, x += kWidth) {
 		const byte *g = glyph((byte)s[i]);
 		if (!g)

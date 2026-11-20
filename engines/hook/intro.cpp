@@ -160,7 +160,8 @@ void Intro::dump(const char *what) {
 	for (int i = 0; i < 256 * 3; i++)
 		pal[i] = _pal[i] * _level / 32;
 	Common::DumpFile out;
-	Common::Path path = _dumpDir.appendComponent(Common::String::format("%05u_%s_s%u_f%u.png", _flips, what, _scene, _frame));
+	Common::String name = Common::String::format("%05u_%s_s%u_f%u.png", _flips, what, _scene, _frame);
+	Common::Path path = _dumpDir.appendComponent(name);
 	if (!out.open(path) || !Image::writePNG(out, *_screen->surfacePtr(), pal))
 		warning("Hook: cannot write %s", path.toString().c_str());
 }

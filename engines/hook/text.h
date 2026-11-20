@@ -59,7 +59,8 @@ public:
 	static const int kWidth = 8;
 
 	void load(const Resources &res);
-	void drawString(Graphics::Surface &dst, int x, int y, const Common::String &s, byte colour, const Common::Rect &clip) const;
+	void drawString(Graphics::Surface &dst, int x, int y, const Common::String &s, byte colour,
+					const Common::Rect &clip) const;
 
 private:
 	const byte *glyph(byte c) const;

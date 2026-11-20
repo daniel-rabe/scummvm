@@ -202,6 +202,7 @@ private:
 	bool runIntro();				///< 001A9 until a click; false = quit
 	// saveload.cpp: the load/save panel (0C398, opened by USE on the save disk, 08C18)
 	void optionsTick();
+	void importOriginalSaves();		///< the original HOOK.SAV slots, once
 	void closeOptions();
 	void applyObjectState();
 	void tick();
@@ -232,6 +233,9 @@ private:
 	const SpriteBank *bankFor(int id) const;
 	void handleKey(const Common::KeyState &key);
 	void setCursor();
+	// testmode.cpp: headless dumps for development
+	bool isTestMode() const;
+	Common::Error runTestMode();
 	Common::Error dumpFrames(const Common::Path &dir);
 	Common::Error dumpMusic(const Common::Path &dir);
 	void initSound();

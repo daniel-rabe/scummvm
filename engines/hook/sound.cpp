@@ -23,9 +23,7 @@
 // effects, the request block written by action sequences and the per-room ambient streams.
 // Everything goes through the driver's request bytes, as in the original.
 
-#include "common/config-manager.h"
 #include "common/debug.h"
-#include "common/file.h"
 
 #include "hook/hook.h"
 #include "hook/music.h"
@@ -122,31 +120,5 @@ void HookEngine::ambientTick() {
 	}
 }
 
-Common::Error HookEngine::dumpMusic(const Common::Path &dir) {
-	// Development aid: "dump_song=N" or "dump_fx=N" (+ "dump_device=adlib|mt32|gm",
-	// "dump_ticks=T") writes the driver's output for T ticks to <dir>/music.txt
-	Common::String dev = ConfMan.hasKey("dump_device") ? ConfMan.get("dump_device") : "adlib";
-	MusicDriver::Device d = dev == "mt32" ? MusicDriver::kMT32 : dev == "gm" ? MusicDriver::kGM : MusicDriver::kAdLib;
-	MusicDriver *m = MusicDriver::createLogger(_res, d);
-	if (!m)
-		return Common::Error(Common::kReadingFailed, "sound driver");
-	if (ConfMan.hasKey("dump_song"))
-		m->playSong(ConfMan.getInt("dump_song"));
-	else
-		m->requestEffect(ConfMan.getInt("dump_fx"), 0x7F);
-	int ticks = ConfMan.hasKey("dump_ticks") ? ConfMan.getInt("dump_ticks") : 1000;
-	for (int t = 0; t < ticks; t++)
-		m->tick();
-	Common::DumpFile f;
-	if (!f.open(dir.appendComponent("music.txt"), true)) {
-		delete m;
-		return Common::Error(Common::kWritingFailed);
-	}
-	for (const Common::String &s : m->log())
-		f.writeString(s + "\n");
-	f.close();
-	delete m;
-	return Common::kNoError;
-}
 
 } // End of namespace Hook

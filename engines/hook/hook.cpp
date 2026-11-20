@@ -25,12 +25,10 @@
 #include "common/endian.h"
 #include "common/file.h"
 #include "common/system.h"
-#include "common/tokenizer.h"
 #include "engines/util.h"
 #include "graphics/cursorman.h"
 #include "graphics/framelimiter.h"
 #include "graphics/paletteman.h"
-#include "image/png.h"
 
 #include "hook/console.h"
 #include "hook/hook.h"
@@ -48,9 +46,9 @@ static const uint16 kDsInventory = 0x870B;		// 16 x u16 item ids
 static const uint16 kDsInventoryScroll = 0x8705;
 static const uint16 kDsVerbButtons = 0x0D40;	// 5 x {x1, y1, x2, y2, src x, src y}, panel coords
 static const uint16 kDsRefusals = 0x4016;		// PICK UP refusals: far ptrs, index -pickup - 1
-static const uint16 kCsSpeakerColour = 0x6E5C;	// code segment: text colour per speaker (DB, DA, C1, DE)
-static const uint16 kDsCursor = 0x0575;
-static const uint16 kDsOptions = 0xCE9B;		// load/save panel: 1 = requested, 3 = shown			// 12x24 pointer, planar, values 1..3 (+0xDC)
+static const uint16 kCsSpeakerColour = 0x6E5C;	// code segment: speech colour (DB, DA, C1, DE)
+static const uint16 kDsCursor = 0x0575;			// 12x24 pointer, planar, values 1..3 (+0xDC)
+static const uint16 kDsOptions = 0xCE9B;		// load/save panel: 1 = requested, 3 = shown
 
 // Stock replies (data-segment messages)
 static const uint16 kMsgUseNothing = 0xAD98;	// USE without hotspot
@@ -109,24 +107,13 @@ Common::Error HookEngine::run() {
 	_screen = new Graphics::Screen();
 	setDebugger(new Console());
 
-	// Development aid (remove before upstreaming): with "dump_frames=<dir>" in the game's
-	// config section, write one composed screen per room as PNG and quit.
-	if (ConfMan.hasKey("dump_frames") && (ConfMan.hasKey("dump_song") || ConfMan.hasKey("dump_fx")))
-		return dumpMusic(Common::Path(ConfMan.get("dump_frames"), '/'));
-	if (ConfMan.hasKey("dump_frames"))
-		return dumpFrames(Common::Path(ConfMan.get("dump_frames"), '/'));
-	if (ConfMan.hasKey("dump_intro")) {
-		// the intro and title once, then the end credits, as PNGs every dump_every flips
-		initSound();
-		Intro intro(this, _screen);
-		intro.setDump(Common::Path(ConfMan.get("dump_intro"), '/'), ConfMan.hasKey("dump_every") ? ConfMan.getInt("dump_every") : 10);
-		intro.run();
-		intro.credits(true);
-		return Common::kNoError;
-	}
+	// Development aid (testmode.cpp): headless dumps selected by config keys
+	if (isTestMode())
+		return runTestMode();
 
 	initSound();
 	setCursor();
+	importOriginalSaves();
 
 	// A save chosen in the launcher skips the intro; otherwise the intro and title (0000),
 	// then a new game
@@ -929,6 +916,10 @@ void HookEngine::drawSpeechLines(const Common::Rect &view, const Common::Array<C
 		x = right - maxW;
 	else
 		x = ax - maxW / 2;
+	// Some translated lines (Italian: 40 characters) are wider than the text area; the original
+	// draws them past the screen's right edge. Keep them on screen.
+	if (x + maxW > _scrollX + kScreenWidth)
+		x = MAX(_scrollX, _scrollX + kScreenWidth - maxW);
 	Graphics::Surface &s = *_screen->surfacePtr();
 	for (uint i = 0; i < lines.size(); i++) {
 		int lw = lines[i].size() * Font::kWidth;
@@ -1060,81 +1051,6 @@ void HookEngine::handleKey(const Common::KeyState &key) {
 	default:
 		break;
 	}
-}
-
-Common::Error HookEngine::dumpFrames(const Common::Path &dir) {
-	// Optional scripted input for headless tests: "dump_clicks=x,y;x,y;..." clicks (screen
-	// coordinates) in room 0, each followed by "dump_ticks" ticks; a frame is written after each.
-	int ticks = ConfMan.hasKey("dump_ticks") ? ConfMan.getInt("dump_ticks") : 0;
-	auto write = [&](const Common::String &name) {
-		drawScreen();
-		byte pal[256 * 3];
-		for (int i = 0; i < 256 * 3; i++)
-			pal[i] = _basePalette[i] * _palLevel[i / 3] / 32;
-		Common::DumpFile out;
-		Common::Path path = dir.appendComponent(name);
-		if (!out.open(path) || !Image::writePNG(out, *_screen->surfacePtr(), pal))
-			warning("Hook: cannot write %s", path.toString().c_str());
-	};
-	if (ConfMan.hasKey("dump_clicks")) {
-		enterRoom(ConfMan.hasKey("dump_room") ? ConfMan.getInt("dump_room") : 0,
-				  ConfMan.hasKey("dump_entry") ? ConfMan.getInt("dump_entry") : 0);
-		if (ConfMan.hasKey("dump_items")) {
-			Common::StringTokenizer items(ConfMan.get("dump_items"), ",");
-			while (!items.empty())
-				addItem(atoi(items.nextToken().c_str()));
-		}
-		if (ConfMan.hasKey("dump_scroll")) {
-			int sx = 0, sy = 0;
-			sscanf(ConfMan.get("dump_scroll").c_str(), "%d,%d", &sx, &sy);
-			setScroll(sx, sy);
-		}
-		if (ConfMan.hasKey("dump_flags")) {
-			// "id=value,id=value"
-			Common::StringTokenizer flags(ConfMan.get("dump_flags"), ",");
-			while (!flags.empty()) {
-				int id = 0, v = 0;
-				sscanf(flags.nextToken().c_str(), "%d=%d", &id, &v);
-				setDsWord(0x86B7 + 2 * id, v);
-			}
-		}
-		if (ConfMan.hasKey("dump_seq"))
-			startSequence((uint16)strtol(ConfMan.get("dump_seq").c_str(), nullptr, 16));
-		Common::StringTokenizer tok(ConfMan.get("dump_clicks"), ";");
-		int step = 0;
-		while (!tok.empty()) {
-			Common::String c = tok.nextToken();
-			int x = 0, y = 0, verb = 0;
-			sscanf(c.c_str(), "%d,%d,%d", &x, &y, &verb);
-			if (verb && verb < 8)
-				_verb = kVerbLatched | verb;
-			_mouse = Common::Point(x, y);
-			tick();
-			if (verb == 9)
-				_clickRight = true;	// "x,y,9" = right-click
-			else if (verb != 8)
-				_clickLeft = true;	// "x,y,8" = no click
-			for (int t = 0; t < ticks; t++)
-				tick();
-			_dirty = true;
-			write(Common::String::format("step%02d.png", step++));
-			debug("step %d: room %u Peter %d,%d frame %d facing %d scroll %d,%d speech %d tink %d,%d", step,
-				  _room.number(), _player.actor.x, _player.actor.y, _player.actor.frame, _player.facing,
-				  _scrollX, _scrollY, (int)_speech.size(), _actors[1].x, _actors[1].y);
-		}
-		return Common::kNoError;
-	}
-	for (uint n = 0; n < Room::kNumRooms; n++) {
-		if (!enterRoom(n)) {
-			warning("Hook: room %u failed to load", n);
-			continue;
-		}
-		for (int t = 0; t < ticks; t++)
-			tick();
-		_dirty = true;
-		write(Common::String::format("frame%02u.png", n));
-	}
-	return Common::kNoError;
 }
 
 } // End of namespace Hook

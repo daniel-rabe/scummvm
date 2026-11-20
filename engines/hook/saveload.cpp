@@ -19,11 +19,15 @@
  *
  */
 
+#include "common/config-manager.h"
 #include "common/debug.h"
 #include "common/endian.h"
+#include "common/file.h"
 #include "common/savefile.h"
 #include "common/stream.h"
 #include "common/translation.h"
+
+#include "engines/metaengine.h"
 
 #include "hook/hook.h"
 
@@ -101,6 +105,48 @@ Common::Error HookEngine::loadGameStream(Common::SeekableReadStream *stream) {
 	if (!enterRoom(dsWord(0x86F7), dsWord(0x86F9)))
 		return Common::kReadingFailed;
 	return Common::kNoError;
+}
+
+void HookEngine::importOriginalSaves() {
+	// The original's HOOK.SAV in the game folder (C802 format): "HOOK LOAD/SAVE DATA", then
+	// 5 slots of the same bytes as ours. Used slots go to the same ScummVM slots, once per
+	// target, and never over an existing save.
+	if (ConfMan.getBool("original_saves_imported"))
+		return;
+	Common::File f;
+	if (!f.open("HOOK.SAV"))
+		return;
+	char header[19];
+	if (f.read(header, sizeof(header)) != sizeof(header) || memcmp(header, "HOOK LOAD/SAVE DATA", 19))
+		return;
+	for (int slot = 1; slot <= 5; slot++) {
+		byte data[kSaveSize];
+		if (f.read(data, kSaveSize) != kSaveSize)
+			break;
+		if (!READ_LE_UINT16(data) || READ_LE_UINT16(data + kSaveSize - 2) != checksum(data))
+			continue;
+		Common::String name = getSaveStateName(slot);
+		if (_saveFileMan->exists(name)) {
+			warning("Hook: HOOK.SAV slot %d not imported, ScummVM slot %d is in use", slot, slot);
+			continue;
+		}
+		Common::OutSaveFile *out = _saveFileMan->openForSaving(name);
+		if (!out)
+			continue;
+		out->writeUint32BE(kSaveMagic);
+		out->writeByte(kSaveVersion);
+		out->writeUint16LE(kSaveSize);
+		out->write(data, kSaveSize);
+		// play time: the 32-bit tick counter [86FD], 14 ticks a second
+		uint32 ticks = READ_LE_UINT32(data + 0x86FD - kDsSave);
+		getMetaEngine()->appendExtendedSave(out, (uint32)((uint64)ticks * 1000 / kTicksPerSecond),
+											Common::String::format("HOOK.SAV slot %d", slot), false);
+		out->finalize();
+		delete out;
+		debugC(1, kDebugScript, "imported HOOK.SAV slot %d", slot);
+	}
+	ConfMan.setBool("original_saves_imported", true);
+	ConfMan.flushToDisk();
 }
 
 void HookEngine::optionsTick() {

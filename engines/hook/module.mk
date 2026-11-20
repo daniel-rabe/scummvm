@@ -18,6 +18,7 @@ MODULE_OBJS = \
 	sequence.o \
 	sound.o \
 	sprites.o \
+	testmode.o \
 	text.o \
 	walk.o
 
