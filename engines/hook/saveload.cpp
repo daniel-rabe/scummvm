@@ -70,7 +70,7 @@ bool HookEngine::canSaveGameStateCurrently(Common::U32String *msg) {
 		   !_convActive && _speechTotal == 0 && _roomCountdown <= 0 && !_pickupTimer && !_giveTimer;
 }
 
-Common::Error HookEngine::saveGameStream(Common::WriteStream *stream, bool isAutosave) {
+const byte *HookEngine::saveSlotData() {
 	// ported: C678. Peter, the view and the walk node go in (none of it is read back)
 	setDsWord(0x86A9, _player.actor.x);
 	setDsWord(0x86AB, _player.actor.y);
@@ -79,21 +79,31 @@ Common::Error HookEngine::saveGameStream(Common::WriteStream *stream, bool isAut
 	setDsWord(0x86B1, _player.facing);
 	setDsWord(0x86A7, 1);
 	setDsWord(kDsSave + kSaveSize - 2, checksum(dsPtr(kDsSave)));
+	return dsPtr(kDsSave);
+}
+
+Common::Error HookEngine::saveGameStream(Common::WriteStream *stream, bool isAutosave) {
+	const byte *data = saveSlotData();
 	stream->writeUint32BE(kSaveMagic);
 	stream->writeByte(kSaveVersion);
 	stream->writeUint16LE(kSaveSize);
-	stream->write(dsPtr(kDsSave), kSaveSize);
+	stream->write(data, kSaveSize);
 	return stream->err() ? Common::kWritingFailed : Common::kNoError;
 }
 
 Common::Error HookEngine::loadGameStream(Common::SeekableReadStream *stream) {
-	// ported: C524
 	if (stream->readUint32BE() != kSaveMagic || stream->readByte() > kSaveVersion ||
 		stream->readUint16LE() != kSaveSize)
 		return Common::kUnknownError;
 	byte data[kSaveSize];
-	if (stream->read(data, kSaveSize) != kSaveSize || READ_LE_UINT16(data + kSaveSize - 2) != checksum(data) ||
-		!READ_LE_UINT16(data))
+	if (stream->read(data, kSaveSize) != kSaveSize)
+		return Common::kReadingFailed;
+	return loadSlotData(data);
+}
+
+Common::Error HookEngine::loadSlotData(const byte *data) {
+	// ported: C524
+	if (READ_LE_UINT16(data + kSaveSize - 2) != checksum(data) || !READ_LE_UINT16(data))
 		return Common::kReadingFailed;
 	memcpy(_ds.data() + kDsSave, data, kSaveSize);
 

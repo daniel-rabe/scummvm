@@ -79,6 +79,10 @@ public:
 	bool canSaveGameStateCurrently(Common::U32String *msg = nullptr) override;
 	Common::Error loadGameStream(Common::SeekableReadStream *stream) override;
 	Common::Error saveGameStream(Common::WriteStream *stream, bool isAutosave = false) override;
+	/** A HOOK.SAV slot (DS:86A7..A91E): the bytes the original's save writes (C678). */
+	const byte *saveSlotData();
+	/** Load a HOOK.SAV slot as the original's load does (C524), then enter its room. */
+	Common::Error loadSlotData(const byte *data);
 	/** 09377: the end of the game; the main loop runs the end credits and the intro. */
 	void endGame() { _gameEnded = true; }
 
@@ -242,6 +246,7 @@ private:
 	bool isTestMode() const;
 	Common::Error runTestMode();
 	Common::Error dumpFrames(const Common::Path &dir);
+	bool hotspotPoint(int k, int &x, int &y) const;
 	Common::Error dumpMusic(const Common::Path &dir);
 	void initSound();
 	void roomSound();

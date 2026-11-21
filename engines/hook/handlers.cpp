@@ -62,12 +62,13 @@ Actor &HookEngine::slotActor(uint16 dsSlot) {
 }
 
 void HookEngine::stopPeter() {
-	// 0A328: deselect verb and item, Peter's target = where he stands (06A78)
+	// 0A328: deselect verb and item, Peter's target = where he stands ([AB7D]/[AB7B]; no path
+	// search, so he stays where a sequence left him), then 06A78 (actor depths)
 	_prevVerb = _verb;
 	_verb = 0;
 	_itemSelected = false;
 	_itemX = 0;
-	_player.walkTo(_player.feetX(), _player.feetY());
+	_player.standStill();
 }
 
 bool HookEngine::loadPeterBank(uint16 nameOff) {

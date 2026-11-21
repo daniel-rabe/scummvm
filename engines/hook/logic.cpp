@@ -309,8 +309,16 @@ void HookEngine::lookEventTick() {
 }
 
 void HookEngine::itemLook(uint16 item) {
-	if (item >= 1 && item <= 38)
-		say(dsMessage(dsWord(kDsItemLook + 4 * (item - 1))), kFacingDown);
+	if (item < 1 || item > 38)
+		return;
+	say(dsMessage(dsWord(kDsItemLook + 4 * (item - 1))), kFacingDown);
+	// 07D39: a one-shot LOOK event per item in the saved state at DS:873F (the jacket holds a
+	// gold piece, the fishing net a piece of string); it fires after the text like a hotspot's
+	uint16 a = 0x873F + 2 * (item - 1);
+	if (uint16 ev = dsWord(a)) {
+		_lookEvent = ev;
+		setDsWord(a, 0);
+	}
 }
 
 // USE / GIVE on hotspots (08CC8, 08DAE, 08EBD, 08EF0)

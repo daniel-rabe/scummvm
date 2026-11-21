@@ -269,6 +269,9 @@ bool HookEngine::enterRoom(uint number, uint entry) {
 	// 0CB3E: no sequences on either channel, no edge-scroll lock (flag 34)
 	for (uint16 v : { 0xAC30, 0xAC48, 0xAC34, 0xAC4C, 0x86FB })
 		setDsWord(v, 0);
+	// 0C92F: and no scripted walking ([ABC9], set by sequences such as Hook's 5B23)
+	for (uint16 v : { 0x873B, 0x873D, 0xABC9 })
+		setDsWord(v, 0);
 	_room.getPalette(_res, _basePalette);
 	for (int i = 0; i < 256; i++)
 		_palLevel[i] = 32;
@@ -390,15 +393,13 @@ void HookEngine::tick() {
 		_dirty = true;
 		return;
 	}
-	// 32-bit play time [86FD] (saved; it also picks Tinkerbell's hint)
-	uint16 t = dsWord(0x86FD) + 1;
-	setDsWord(0x86FD, t);
-	if (!t)
-		setDsWord(0x86FF, dsWord(0x86FF) + 1);
 	_anim.tick(_room, _objects);
 
 	// 053EA: depth factor, hotspot under the mouse, edge scrolling, exit zones
-	_player.updateDepth(_room);
+	// (skipped while [AB75] != 0: after the sequence runner (088E0) that is channel B's pointer,
+	// so a running channel-B sequence freezes Peter's depth)
+	if (!dsWord(0xAC48))
+		_player.updateDepth(_room);
 	int canvasX = _mouse.x + _scrollX + 1, canvasY = _mouse.y + _scrollY;
 	_hover = (_mouse.y < kViewHeight) ? hitTest(canvasX, canvasY) : 0;
 	// 05455: no edge scrolling (nor while flag 34 is set) and no exits while channel A runs
@@ -406,18 +407,6 @@ void HookEngine::tick() {
 		if (!dsWord(0x86FB))
 			edgeScroll();
 		checkExits();
-	}
-
-	// 0C873: room change countdown
-	if (_roomCountdown > 0 && --_roomCountdown == 0) {
-		if (_roomGuard) {
-			_roomGuard = false;
-			_roomCountdown = -1;
-		} else {
-			enterRoom(dsWord(0x86F7), dsWord(0x86F9));
-			_clickLeft = _clickRight = false;
-			return;
-		}
 	}
 
 	arrowTick();
@@ -486,6 +475,25 @@ void HookEngine::tick() {
 	for (int r = 0; r < kRetracesPerTick; r++)
 		fadeStep();
 	_dirty = true;
+
+	// 0C36D -> 0C873, at the end of the main loop: the room change countdown. An exit zone
+	// (06AE0) only arms it, so Peter still takes this tick's step in the old room. The room
+	// change leaves the loop before the play time increment (0C896 pops the return address).
+	if (_roomCountdown > 0 && --_roomCountdown == 0) {
+		if (_roomGuard) {
+			_roomGuard = false;
+			_roomCountdown = -1;
+		} else {
+			enterRoom(dsWord(0x86F7), dsWord(0x86F9));
+			_clickLeft = _clickRight = false;
+			return;
+		}
+	}
+	// 0C370: 32-bit play time [86FD] (saved; it also picks Tinkerbell's hint)
+	uint16 t = dsWord(0x86FD) + 1;
+	setDsWord(0x86FD, t);
+	if (!t)
+		setDsWord(0x86FF, dsWord(0x86FF) + 1);
 }
 
 void HookEngine::edgeScroll() {

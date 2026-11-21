@@ -57,6 +57,8 @@ public:
 
 	/** Walk towards canvas point (x, y) (feet coordinates). False if already there. */
 	bool walkTo(int x, int y);
+	/** 0A343: the segment target becomes where Peter stands; no path search, no movement. */
+	void standStill() { _tx = actor.x; _ty = actor.y + 0x30; }
 
 	/** Walk target for a hotspot record (5E94): -1 = no walk node, 0 = outside graph, 1 = ok. */
 	int hotspotTarget(uint16 walkNode, int &x, int &y) const;
@@ -76,6 +78,8 @@ public:
 	void selectGraph(uint node) { if (_room) _graph.select(*_room, node); }
 	/** Restart the walk-cycle frame tables ([0D80]/[0DBE] = 0). */
 	void resetStepPhase() { _hIndex = _vIndex = 0; }
+	int stepPhaseH() const { return _hIndex; }	///< [0D80] (tests)
+	int stepPhaseV() const { return _vIndex; }	///< [0DBE] (tests)
 
 	/** 53EA: depth factor from the feet y and the room header (0 = far region / none). */
 	void updateDepth(const Room &room);
