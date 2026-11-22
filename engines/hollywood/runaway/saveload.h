@@ -40,6 +40,7 @@ struct RunawaySaveState {
 	struct Museum {
 		byte susan = 0, restoration = 0, laserUpgraded = 0, laserSeen = 0, shelvesSeen = 0;
 		byte susanMet = 0, labVisited = 0, shelfBooksSeen = 0, safeUsed = 0;
+		byte officeVisited = 0, exhibitionVisited = 0, phonePlanExplained = 0;
 		byte willyMet = 0, batteryRequested = 0, coffeeMachine = 0, coffeeSeen = 0;
 		byte basketSeen = 0, needsPackage = 0, needsGroundCoffee = 0, willyInLab = 0;
 		byte keypad = 0, sawCode = 0, phoneUsed = 0, voiceLockSeen = 0;
@@ -84,11 +85,94 @@ struct RunawaySaveState {
 		byte gunReady = 0, bombReady = 0, helicopterReady = 0;
 	} desertItems;
 
+	struct Town {
+		byte arrived = 0, streetVisited = 0, strapSeen = 0;
+		byte sushiMet = 0, mineMapKnown = 0;
+		byte bankVisited = 0, bankShelves = 0, bankStampTaken = 0, basementKnown = 0;
+		byte bodySeen = 0, doctorKnown = 0, firewoodTaken = 0, cellOpen = 0;
+		byte bagSearched = 0, bucketSeen = 0, bottleSeen = 0, cellRefusals = 0;
+		byte safeSeen = 0, oscarTobacco = 0, stethoscopeTaken = 0, linimentTaken = 0;
+		byte locomotiveVisited = 0, locomotiveKey = 0, waterTank = 0;
+		byte cabVisited = 0, cabExited = 0, boiler = 0;
+		byte steamLever = 0, pressureWheel = 0, drainSeen = 0;
+		byte craterSeen = 0;
+		byte mineVisited = 0, oilCan = 0, rockMoved = 0;
+		byte houseVisited = 0, stone = 0, vessel = 0;
+		byte oscarMet = 0, oscarHelpRefused = 0, rawTobaccoRefused = 0;
+		byte saloonEntranceVisited = 0, saloonDoorKnown = 0, saloonVisited = 0;
+		byte flowerPotTaken = 0, gardeningShed = 0, tobaccoLeavesTaken = 0;
+		byte artichokeSeen = 0, carnivorousPlantSeen = 0;
+		byte craterVisited = 0, joshuaMet = 0, campLeft = 0;
+		byte strapDelivered = 0, wrenchDelivered = 0, wrenchNeeded = 0, fuelNeeded = 0;
+		byte machineKnown = 0, rotorKnown = 0, batteryKnown = 0, helmetKnown = 0, dimensionalDoorKnown = 0;
+		byte strapIdea = 0;
+		byte sandingBlock = 0, wrenchThrown = 0, wrenchFound = 0, wrenchInTroughSeen = 0;
+		byte kevinAway = 0, craterFloorVisited = 0, joshuaGone = 0, helmetTaken = 0;
+		byte kevinMet = 0, catapult = 0, statueLowered = 0, blowtorchTaken = 0;
+		byte sculptureTraded = 0, craneKnown = 0, craneTried = 0, wrenchPermission = 0;
+		byte fuelTradeKnown = 0, waterPermission = 0, waterRequested = 0, hopiDiscussed = 0;
+		byte roughSculptureRefused = 0, polishedSculptureRefused = 0, oscarStrengthKnown = 0;
+		byte basementVisited = 0, bankImpactSeen = 0;
+		byte safeOpened = 0, stethoscopeTried = 0, safeDialVisited = 0;
+		byte safeDial = 69, safeProgress = 0;
+		byte machinePowered = 0, melodyTried = 0, campingGearTaken = 0;
+	} town;
+
+	struct TownItems {
+		byte strap = 0; // Loose, needs joining, joined.
+		byte sculpture = 0; // Rough, sanded, decorated with amber.
+		byte oilCanFull = 0, bottleContents = 0;
+		byte tube30 = 0, tube50 = 0; // Contents in units of ten cubic centimeters.
+		byte mortar = 0, mortarIdea = 0;
+	} townItems;
+
+	struct Hopi {
+		byte cliffVisited = 0, skeletonSeen = 0, nail = 0, timber = 0;
+		byte femurTaken = 0, rockTried = 0;
+		byte ginaFound = 0, villageLevel = 0, rope = 0, legSplinted = 0;
+		byte cryptVisited = 0;
+		byte canyonVisited = 0, cryptEntranceVisited = 0, keyholeBlockedKnown = 0, bushSeen = 0;
+		byte cryptDoor = 0; // Sand-blocked, cleared, open, sealed after visiting Wupuchim.
+		byte statueVisited = 0, tomahawk = 0, leftCrossSeen = 0, rightCrossSeen = 0;
+	} hopi;
+
+	struct HopiItems {
+		byte toolHandle = 0;
+	} hopiItems;
+
+	struct Finale {
+		byte doritaMet = 0, mediumDiscussed = 0, mediumTests = 0, seanceComplete = 0;
+		byte oscarAway = 0, gangsters = 0, moneyFound = 0, nunsHabit = 0;
+		byte trailerFound = 0; // Unknown, directions from Saturn, visited.
+		byte recordingPlan = 0, recordings = 0, ginaUpdates = 0, ginaVisitPending = 0;
+		byte gangstersMet = 0, gangsterBag = 0; // Bag: absent, present, examined, taken.
+		byte scalpelNeeded = 0, streetVisited = 0, sheriffThanked = 0, sushiVisited = 0;
+		byte bankResearch = 0; // Not started, requested, Brian went away, results ready.
+		byte voicePlanPending = 0, voiceEditing = 0, departure = 0;
+		byte rutgerMet = 0, rutgerTranceDiscussed = 0, rutgerBrewDiscussed = 0, rutgerPlantHint = 0;
+		byte rutgerBrew = 0; // Not started, brewing, consumed, discussed afterward.
+		byte saloonVisited = 0;
+		byte locomotiveBadge = 0; // In the boiler, on the ground, examined, taken.
+		byte saturnMet = 0, craterVisited = 0;
+		byte hotelVisited = 0, rifle = 0, pokerTaken = 0, bellRings = 0;
+		byte sushiTruthTold = 0, hackerKnown = 0, trailerDiscussed = 0, gangstersDiscussed = 0;
+		byte bagDelivered = 0; // Not delivered, waiting for Sushi, examined.
+		byte movieFanKnown = 0;
+		byte trailerVisited = 0, trailerDoor = 0, trailerDoorTried = 0, bankBrochureTaken = 0;
+		byte trailerWarnings = 0, trailerInteriorVisited = 0;
+		byte ginaVisited = 0, ginaMediumDiscussed = 0;
+	} finale;
+
+	struct FinaleItems {
+		byte scalpel = 0; // Cold, hot, cooled after cutting the pods.
+		byte heatNeeded = 0, podsOpened = 0;
+	} finaleItems;
+
 	uint16 scene = 5030, x = 623, y = 447, camera = 111;
 	byte facing = 3, lidOpen = 0, unplugged = 0, windowClean = 0;
 	byte coolerMoved = 0, coolerInspected = 0, peeked = 0, ice = 0, hatch = 0;
 	byte pickedUp[20] = {}, examined[20] = {};
-	byte itemCount = 0, items[26] = {}, selected = 0, cloth = 0;
+	byte itemCount = 0, items[32] = {}, selected = 0, cloth = 0;
 	byte inventoryOpen = 0, verb = 0;
 	uint32 randomSeed = 0, playTime = 0;
 	byte game = kRunawayCabinDemo;

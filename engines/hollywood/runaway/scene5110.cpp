@@ -20,33 +20,35 @@
  */
 
 #include "common/util.h"
-#include "hollywood/runaway/scene.h"
-#include "hollywood/runaway/scene_data.h"
+#include "hollywood/runaway/scene5110.h"
 
 namespace Hollywood {
 namespace {
 
 const RunawayHotspot kHotspots[] = {
-	{"", 0, 0, 0, {0, 0}, {0, 0}},
-	{"?", 327, 441, 7, {301, 302}, {0, 1}},
-	{"?", 574, 434, 1, {303, 304}, {1, 0}},
-	{"Chain", 801, 441, 3, {305, 306}, {0, 0}},
-	{"Contraptions", 517, 374, 0, {307, 308}, {0, 0}},
-	{"Barrel", 510, 377, 0, {309, 310}, {1, 1}},
-	{"Bucket", 365, 485, 5, {311, 312}, {1, 1}},
-	{"Clock", 801, 441, 3, {313, 314}, {0, 0}},
-	{"Bucket", 510, 377, 0, {320, 321}, {0, 1}},
+	{0, 0, 0, {0, 0}, {0, 0}, {0, 0}},
+	{327, 441, 7, {301, 302}, {0, 1}, {247, 373}, 4}, // 1: Outside Of Train Car.
+	{574, 434, 1, {303, 304}, {1, 0}, {618, 400}}, // 2: Barrels.
+	{801, 441, 3, {305, 306}, {0, 0}, {835, 467}}, // 3: Chain.
+	{517, 374, 0, {307, 308}, {0, 0}, {517, 353}}, // 4: Contraptions.
+	{510, 377, 0, {309, 310}, {1, 1}, {517, 353}}, // 5: Barrel.
+	{365, 485, 5, {311, 312}, {1, 1}, {347, 500}}, // 6: Bucket.
+	{801, 441, 3, {313, 314}, {0, 0}, {937, 558}}, // 7: Clock.
+	{510, 377, 0, {320, 321}, {0, 1}, {517, 353}}, // 8: Bucket.
+	{0, 0, 0, {0, 0}, {0, 0}, {0, 0}}, // 9: Barrel Of Gunpowder.
 };
 
 const RunawayResponse kResponses[] = {
-	{5110, 301, 1, 0},
-	{5110, 305, 4, 0},
-	{5110, 306, 5, 0},
-	{5110, 307, 6, 0},
-	{5110, 308, 7, 0},
-	{5110, 313, 12, 0},
-	{5110, 314, 13, 0},
-	{5110, 315, 14, 0},
+	{5110, 301, 1, 0}, // Look at the exit door.
+	{5110, 304, 3, 0}, // Open the compartment door by hand.
+	{5110, 305, 4, 0}, // Look at the chain.
+	{5110, 306, 5, 0}, // Pull the chain.
+	{5110, 307, 6, 0}, // Look at the contraptions.
+	{5110, 308, 7, 0}, // Use the contraptions.
+	{5110, 313, 12, 0}, // Look at the clock.
+	{5110, 314, 13, 0}, // Use the clock.
+	{5110, 315, 14, 0}, // Use the crowbar with the barrel.
+	{5110, 318, 15, 0}, // Use the crowbar with the chain.
 };
 
 const RunawayItemAction kItemActions[] = {
@@ -70,46 +72,84 @@ const RunawayRoom kRunawayScene5110 = {
 	nullptr, 0
 };
 
-RunawayRoomScene::ActionResult RunawayRoomScene::execute5110(uint16 action) {
+namespace Runaway {
+
+Scene5110::Scene5110(RunawayAudio &audio, RunawayInventory &inventory, const RunawayStrings &strings, RunawayGameType game) :
+	RunawayRoomScene(audio, inventory, strings, game) {}
+
+bool Scene5110::loadCustomResources() {
+	return _bucketAnimation.load(_archive, 8, 1) &&
+		_doorAnimation.load(_archive, 9, 2);
+}
+
+bool Scene5110::applyCustomBackgroundPatches() {
+	return _desert.barrel != 2 || applyPatch(13);
+}
+
+void Scene5110::applyCustomHotspotState() {
+	for (uint i = 0; i < 256; ++i) {
+		byte &id = _maps[256 + i];
+		if (id == 8) {
+			id = _desert.bucket == 1 || _desert.bucket == 2 ? 8 : 4;
+		}
+	}
+}
+
+float Scene5110::actorHeight() const {
+	return _position.y * 1.142857194f - 170.571426f;
+}
+
+void Scene5110::setupActorDepth(RunawayActor::RenderParams &params) const {
+	params.depthY[1] = 599;
+	params.depthY[2] = 408;
+}
+
+RunawayRoomScene::ActionResult Scene5110::dispatchCustomSceneAction(uint16 action) {
 	RunawaySaveState::DesertItems &items = _inventory.desert();
 	switch (action) {
-	case 302:
+	case 1400: // Finish climbing into the train car.
+		visitDesertRoom(7, 1);
+		break;
+	case 302: // Leave the train car.
 		leaveDesertRoom(5081);
 		break;
-	case 303:
+	case 303: // Look at the closed compartment door.
 		say(2, _desert.trainDoorOpen != 0);
 		break;
-	case 309:
+	case 309: // Look at the barrel.
 		say(8, _desert.barrel);
-		if (!_desert.barrel)
+		if (!_desert.barrel) {
 			_desert.barrel = 1;
+		}
 		break;
-	case 310:
-		if (!_desert.barrel)
-			execute5110(309);
+	case 310: // Use the barrel.
+		if (!_desert.barrel) {
+			dispatchCustomSceneAction(309);
+		}
 		say(9, _desert.barrel == 2);
 		break;
-	case 311:
+	case 311: // Look inside the bucket.
 		say(10, _desert.screwSeen != 0);
 		_desert.screwSeen = 1;
 		break;
-	case 312:
-		if (_desert.screwTaken)
+	case 312: // Take the screw from the bucket.
+		if (_desert.screwTaken) {
 			say(11, 2);
-		else {
-			if (!_desert.screwSeen)
-				execute5110(311);
+		} else {
+			if (!_desert.screwSeen) {
+				dispatchCustomSceneAction(311);
+			}
 			say(11);
 			_inventory.add(7);
 			_desert.screwTaken = 1;
 			say(11, 1);
 		}
 		break;
-	case 316:
+	case 316: // Use the screw with the barrel.
 		say(16);
 		_desert.powderNeeded = 1;
 		break;
-	case 317:
+	case 317: // Drill the barrel with the makeshift drill.
 		if (!_desert.bucket) {
 			say(17);
 			_desert.powderNeeded = 1;
@@ -120,32 +160,32 @@ RunawayRoomScene::ActionResult RunawayRoomScene::execute5110(uint16 action) {
 			say(17, 3);
 		}
 		break;
-	case 1317:
+	case 1317: // Finish filling the bucket with gunpowder.
 		_desert.barrel = 2;
 		_desert.bucket = 2;
 		say(17, 2);
 		return kBackgroundChanged;
-	case 319:
-		if (_desert.trainDoorOpen)
+	case 319: // Pry open the compartment door.
+		if (_desert.trainDoorOpen) {
 			say(18, 3);
-		else {
+		} else {
 			say(18);
 			beginRoomAnimation(action, 10, 49);
 		}
 		break;
-	case 1319:
+	case 1319: // Collect the peanuts behind the door.
 		_desert.trainDoorOpen = 1;
 		say(18, 1);
 		_inventory.add(18);
 		say(18, 2);
 		return kBackgroundChanged;
-	case 320:
+	case 320: // Look at the bucket beneath the barrel.
 		say(19, _desert.bucket != 1);
 		break;
-	case 321:
-		if (_desert.bucket == 1)
+	case 321: // Take the bucket beneath the barrel.
+		if (_desert.bucket == 1) {
 			say(20);
-		else {
+		} else {
 			_desert.bucket = 3;
 			items.bucket = 1;
 			_inventory.add(25);
@@ -153,27 +193,28 @@ RunawayRoomScene::ActionResult RunawayRoomScene::execute5110(uint16 action) {
 			return kBackgroundChanged;
 		}
 		break;
-	case 322:
-		if (!_desert.powderNeeded)
+	case 322: // Place the empty bucket beneath the barrel.
+		if (!_desert.powderNeeded) {
 			say(21);
-		else if (_desert.bucket)
+		} else if (_desert.bucket) {
 			say(17, 3);
-		else {
+		} else {
 			say(21, 1);
 			beginRoomAnimation(action, 11, 49);
 		}
 		break;
-	case 1322:
+	case 1322: // Finish positioning the bucket.
 		_desert.bucket = 1;
 		_inventory.remove(25);
 		return kBackgroundChanged;
-	case 323:
-		if (!_desert.powderNeeded)
+	case 323: // Use the helmet with the barrel.
+		if (!_desert.powderNeeded) {
 			say(14, 0, true);
-		else
+		} else {
 			say(22, items.helmet == 0);
+		}
 		break;
-	case 324:
+	case 324: // Use the butter with the barrel.
 		say(_desert.powderNeeded ? 23 : 14, 0, !_desert.powderNeeded);
 		break;
 	default:
@@ -182,4 +223,30 @@ RunawayRoomScene::ActionResult RunawayRoomScene::execute5110(uint16 action) {
 	return kHandled;
 }
 
+void Scene5110::runCustomEntrySequence() {
+	_facing = 3;
+	beginRoomAnimation(400, 7, 12);
+}
+
+void Scene5110::handleAnimationFrameHook() {
+	if (_roomAction == 400 && _actionStep == 9) {
+		_audio.playFootstep(3, _random.getRandomBit(), 230, 327);
+	}
+}
+
+Common::U32String Scene5110::hotspotName(byte id) const {
+	if (id == 5 && _desert.barrel) {
+		return RunawayRoomScene::hotspotName(9);
+	}
+	return RunawayRoomScene::hotspotName(id);
+}
+
+void Scene5110::drawCustomBackgroundComposite(Graphics::ManagedSurface &viewport) {
+	if (_desert.bucket != 0 && _desert.bucket != 3) {
+		_bucketAnimation.draw(viewport, 0, _camera.x, -_camera.y);
+	}
+	_doorAnimation.draw(viewport, _desert.trainDoorOpen != 0, _camera.x, -_camera.y);
+}
+
+} // End of namespace Runaway
 } // End of namespace Hollywood

@@ -39,6 +39,7 @@ bool loadRunawaySurface(uint chunk, int width, int height, Graphics::ManagedSurf
 bool loadRunawaySurface(const Common::Path &path, int width, int height, Graphics::ManagedSurface &surface);
 bool loadRunawaySurface(ChunkArchive &archive, uint chunk, int width, int height, Graphics::ManagedSurface &surface);
 bool loadRunawayMask(ChunkArchive &archive, int width, int height, Common::Array<byte> &mask, Common::Array<byte> &maps, uint chunk = 1);
+byte findRunawayLight(Common::Point position, int width, const Common::Array<byte> &mask, const Common::Array<byte> &maps);
 bool applyRunawayPatch(const Common::Array<byte> &patch, Graphics::ManagedSurface &surface, int yOffset = 0, int xOffset = 0);
 
 enum {
@@ -77,13 +78,15 @@ public:
 		int roomWidth = 0;
 		float height = 455;
 		// A depth layer hides the actor until his feet pass its Y threshold.
-		int16 depthY[7] = {0, 32767, 32767, 32767, 32767, 32767, 32767};
+		int16 depthY[10] = {0, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767};
 		byte light[3] = {100, 100, 100};
 		bool antialias = true;
 	};
 	bool load(Model model = kCabin);
 	bool loadChapter(byte chapter, bool alternate);
 	bool setFrame(uint facing, uint frame, int headFrame = -1);
+	bool loadAction(uint chunk, uint frames);
+	bool setActionFrame(uint frame);
 	static float perspectiveHeight(Common::Point position);
 	void draw(Graphics::ManagedSurface &surface, Common::Point position, int cameraX,
 		int roomTop, const Common::Array<byte> &mask, const Common::Array<byte> &maps,
@@ -97,8 +100,10 @@ private:
 	uint _width = 345, _height = 518;
 	int _anchorX = 168, _anchorY = 434;
 	bool _museum = false;
+	bool decodeBodyFrame(const Common::Array<byte> &bank, const byte *descriptor, uint end);
 	bool decodeFrame(const Common::Array<byte> &bank, const byte *descriptor, uint end, bool head);
 	Common::Array<byte> _descriptors, _headDescriptors;
+	Common::Array<byte> _actionDescriptors, _actionBank;
 	Common::Array<byte> _banks[kFacings];
 	Common::Array<byte> _headBanks[kHeadFacings];
 	Common::Array<byte> _pixels, _opacity, _shadow;
