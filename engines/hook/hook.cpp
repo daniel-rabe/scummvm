@@ -948,15 +948,16 @@ void HookEngine::drawPanel() {
 		for (int x = 0; x < kScreenWidth; x++)
 			dst[x] = src[x] + 0xE0;
 	}
-	// The latched verb shows its pressed image from the lower half of the sheet.
+	// The latched verb shows its pressed image from the lower half of the sheet (07357): 32x23
+	// pixels from (src x + 8, src y) to (x1, y1 + 3).
 	if (_verb & kVerbLatched) {
 		uint16 b = kDsVerbButtons + 12 * ((_verb & 0xF) - 1);
-		int x1 = (int16)dsWord(b), y1 = (int16)dsWord(b + 2), x2 = (int16)dsWord(b + 4), y2 = (int16)dsWord(b + 6);
-		int sx = (int16)dsWord(b + 8), sy = (int16)dsWord(b + 10);
-		for (int y = 0; y < y2 - y1 && sy + y < 144; y++) {
-			byte *dst = (byte *)_screen->getBasePtr(x1, kViewHeight + y1 + y);
+		int x1 = (int16)dsWord(b), y1 = (int16)dsWord(b + 2);
+		int sx = (int16)dsWord(b + 8) + 8, sy = (int16)dsWord(b + 10);
+		for (int y = 0; y < 23 && sy + y < 144 && y1 + 3 + y < kPanelHeight; y++) {
+			byte *dst = (byte *)_screen->getBasePtr(x1, kViewHeight + y1 + 3 + y);
 			const byte *src = _panel.data() + (sy + y) * kScreenWidth + sx;
-			for (int x = 0; x < x2 - x1; x++)
+			for (int x = 0; x < 32 && x1 + x < kScreenWidth && sx + x < kScreenWidth; x++)
 				dst[x] = src[x] + 0xE0;
 		}
 	}
