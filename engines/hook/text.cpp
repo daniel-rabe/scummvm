@@ -103,8 +103,9 @@ void Font::drawString(Graphics::Surface &dst, int x, int y, const Common::String
 			for (int gx = 0; gx < kWidth; gx++) {
 				int tx = x + gx;
 				byte v = g[gy * kWidth + gx];
+				// 0386D: 0 transparent, 1 (the outline) black, 2 and up (the fill) the text colour
 				if (v && tx >= clip.left && tx < clip.right)
-					row[tx] = (v == 1) ? colour : v - 1;
+					row[tx] = (v == 1) ? 0 : colour;
 			}
 		}
 	}
