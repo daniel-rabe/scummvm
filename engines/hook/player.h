@@ -51,6 +51,7 @@ public:
 
 	Actor actor;
 	int facing = kFacingDown;	///< [140C]
+	int entryX = 0, entryY = 0;	///< slot position at the last room entry, before the first step
 
 	/** 0C95D: place Peter at entry `index` of the room and start walking to its second node. */
 	void enterRoom(Room &room, uint index);
@@ -71,6 +72,7 @@ public:
 	bool isWalking() const { return _targetNode != 0; }
 
 	int depth() const { return _depth; }
+	void setDepth(int d) { _depth = d; }
 	int feetX() const { return actor.x - 16; }
 	int feetY() const { return actor.y + 48; }
 	const WalkGraph &graph() const { return _graph; }

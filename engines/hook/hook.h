@@ -233,6 +233,10 @@ private:
 
 	void drawScreen();
 	void drawView();
+	/** 0CFCC: Peter scaled down by his depth (1), as he is (0) or not at all (-1). */
+	int scalePeter(const Frame &f, Frame &out);
+	/** 06D55: the exit name under the mouse (once per frame, after scrolling). */
+	void updateHoverName();
 	void updateDepths();
 	void drawSpeech(const Common::Rect &view);
 	void drawSpeechLines(const Common::Rect &view, const Common::Array<Common::String> &lines, int ax, int bx,
@@ -290,6 +294,10 @@ private:
 	int _selectAnim = 0;			///< [AC17]
 	SpriteBank _arrowsBank;			///< ARROWS.BIN
 	SpriteBank _tinkerBank;			///< TINKER.BIN
+	Frame _scaledPeter;				///< 0D2CD: the scaled frame (DS:2DD2)
+	int _hoverName = -1;			///< cs:6E3C: the exit name shown, -1 = none
+	int _hoverX = 0, _hoverY = 0;	///< cs:6E3E/6E40: its canvas position
+	Common::String _hoverText;
 	Actor _actors[6];				///< actors 1..5 (original DS:1410..); [0] unused, Peter is _player
 	uint16 _seqCounter = 0;			///< [AB79] counter of the channel being run
 	uint16 _seqDesc = 0;			///< [AB75] descriptor being run

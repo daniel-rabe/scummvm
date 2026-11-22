@@ -59,6 +59,8 @@ void Player::enterRoom(Room &room, uint index) {
 	actor.x = pa.x + 16;
 	actor.y = pa.y - 48;
 	actor.frame = kStandFrame + facing;
+	entryX = actor.x;
+	entryY = actor.y;
 	_tx = actor.x;
 	_ty = pa.y;
 

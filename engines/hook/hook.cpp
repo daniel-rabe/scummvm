@@ -306,6 +306,18 @@ bool HookEngine::enterRoom(uint number, uint entry) {
 	setDsWord(0xAC44, 0);
 	_convActive = false;
 	_player.enterRoom(_room, entry);
+	// 0CA25: Tinkerbell starts at Peter's entry position; up to room 10 she follows Peter's
+	// slot ([41C7]/[41CB] -> 1400/1404), from room 11 on she is hidden ([8739] = 0) until a
+	// room hook or sequence brings her back
+	setDsWord(0x18C6, (uint16)_player.entryX);
+	setDsWord(0x18C8, (uint16)_player.entryY);
+	if (number <= 0x0A) {
+		setDsWord(0x41C7, 0x1400);
+		setDsWord(0x41CB, 0x1404);
+		setDsWord(0x41CF, 0x1408);
+	} else {
+		setDsWord(0x8739, 0);
+	}
 	// 0CA5A: scroll x = Peter - 176, clamped to 16 .. header +1C - 320 (then floored at 15)
 	int sx = _player.actor.x - 0xB0;
 	if (sx <= kScrollLeftLimit)
@@ -472,6 +484,7 @@ void HookEngine::tick() {
 	tinkerTick();
 
 	applyScroll();
+	updateHoverName();	// 0C349 -> 06B6B, drawn with this frame
 	for (int r = 0; r < kRetracesPerTick; r++)
 		fadeStep();
 	_dirty = true;
@@ -850,6 +863,91 @@ void HookEngine::updateDepths() {
 		upd(a);
 }
 
+int HookEngine::scalePeter(const Frame &f, Frame &out) {
+	// ported: 0CFCC..0D34B. Returns 0 to draw the frame as it is, 1 for the scaled frame in
+	// `out`, -1 to draw nothing (scaled to nothing).
+	// Not while a sequence moves Peter (unless it is scripted walking), not from room 39 on
+	if (dsWord(0xAC30) && !dsWord(0xABC9))
+		return 0;
+	if (_room.number() >= 0x27)
+		return 0;
+	// 0CFE2: as Pan (flag 0) he is drawn at depth 6 or more wherever the depth is not 0
+	if (dsWord(0x86B7) && _player.depth() && _player.depth() < 6)
+		_player.setDepth(6);
+	int depth = _player.depth();
+	if (!depth)
+		return 0;
+	int w = f.width, h = f.height;
+	// header +60/+62: width loss per depth unit (16.16; the original halves the low word
+	// only), times the width in 8-pixel columns; +64/+66: height loss per depth unit
+	uint32 eW = ((uint32)_room.word(0x62) << 16) | (_room.word(0x60) >> 1);
+	uint32 eH = ((uint32)_room.word(0x66) << 16) | _room.word(0x64);
+	int cols = w >> 3;
+	uint32 dW = eW * (uint32)MAX(cols, 1);
+	int32 hh = (int32)((uint32)h << 16), ww = (int32)((uint32)w << 16);
+	for (int i = 0; i < depth; i++) {
+		hh -= (int32)eH;
+		ww -= (int32)dW;
+	}
+	int nh = (int16)(hh >> 16), nw = (int16)(ww >> 16);
+	if (nh <= 0 || nw <= 0)
+		return -1;
+	if (nh >= h || nw >= w)
+		return 0;
+	// 0D142: the new x offset from the frame's one and the lost width
+	int32 xo = (int32)((uint32)(uint16)f.dx << 16);
+	for (int i = 0; i < depth; i++)
+		xo += (int32)eW;
+	int dx = ((int16)(xo >> 16) + (w - nw)) / 2 + 1;
+	dx -= (depth >= 10) + (depth >= 20) + (depth >= 30);
+	// 0D1D6: Bresenham lists of the rows and columns that are left out
+	auto dropList = [](int n, int keep) {
+		Common::Array<int> list;
+		int drop = n - keep, bp = 2 * drop - n;
+		for (int i = 0; i < n; i++) {
+			while (bp >= 0) {
+				bp -= 2 * n;
+				list.push_back(i);
+			}
+			bp += 2 * drop;
+		}
+		return list;
+	};
+	Common::Array<int> dropRows = dropList(h, nh), dropCols = dropList(w, nw);
+	out.width = nw;
+	out.height = nh;
+	out.dx = dx;
+	out.dy = f.dy + (h - nh);	// the feet stay where they were
+	out.flags = f.flags | 0x4000;
+	out.pixels.resize(nw * nh);
+	out.mask.resize(nw * nh);
+	for (int i = 0; i < nw * nh; i++)
+		out.pixels[i] = out.mask[i] = 0;
+	uint ri = 0;
+	int y = 0;
+	for (int j = 0; j < h && y < nh; j++) {
+		if (ri < dropRows.size() && dropRows[ri] == j) {
+			ri++;
+			continue;
+		}
+		uint ci = 0;
+		int x = 0;
+		for (int i = 0; i < w && x < nw; i++) {
+			if (ci < dropCols.size() && dropCols[ci] == i) {
+				ci++;
+				continue;
+			}
+			// the scaled frame goes through the raw blitter: colour 0 is transparent
+			byte p = f.mask[j * w + i] ? f.pixels[j * w + i] : 0;
+			out.pixels[y * nw + x] = p;
+			out.mask[y * nw + x] = p ? 1 : 0;
+			x++;
+		}
+		y++;
+	}
+	return 1;
+}
+
 void HookEngine::drawView() {
 	Common::Rect view(0, 0, kScreenWidth, kViewHeight);
 	_screen->fillRect(view, 0);
@@ -874,7 +972,18 @@ void HookEngine::drawView() {
 		if (f)
 			items.push_back(Item{ &a, f, order, xOffset });
 	};
-	add(_player.actor, 0, kPeterXOffset);
+	{
+		// Peter, scaled down in the depth region (0CFCC)
+		const SpriteBank *b = bankFor(_player.actor.bank);
+		const Frame *f = b ? b->frame(_player.actor.frame) : nullptr;
+		if (f) {
+			int r = scalePeter(*f, _scaledPeter);
+			if (r > 0)
+				items.push_back(Item{ &_player.actor, &_scaledPeter, 0, kPeterXOffset });
+			else if (r == 0)
+				items.push_back(Item{ &_player.actor, f, 0, kPeterXOffset });
+		}
+	}
 	for (int i = 1; i < 6; i++)
 		add(_actors[i], i, kObjectXOffset);
 	for (uint i = 0; i < _objects.size(); i++)
@@ -888,7 +997,37 @@ void HookEngine::drawView() {
 	drawSpeech(view);
 }
 
+void HookEngine::updateHoverName() {
+	// 06D55, every frame: the position is worked out in canvas coordinates when the name
+	// appears and kept while the same name stays up (cs:6E3C..6E42), so the text moves with the
+	// view when it scrolls
+	if (_hover && !dsWord(0xAC44) && !dsWord(0xABF7) && !dsWord(0xAC30) && !dsWord(0xAC48) &&
+		!dsWord(0xABEB) && !dsWord(0xAC36) && _speech.empty() && !_convActive) {
+		int name = (int16)dsWord(_hover);
+		if (name >= 1) {
+			Common::Array<Common::String> l = _lang.lines(dsWord(0x18CA + 4 * (name - 1)));
+			if (!l.empty()) {
+				if (name != _hoverName) {
+					_hoverName = name;
+					_hoverText = l[0];
+					int len = l[0].size() + 1;	// 06E60 counts the terminating zero
+					_hoverX = _scrollX + 0xA8 - 4 * len;
+					_hoverY = _scrollY + 0x3C;
+				}
+				return;
+			}
+		}
+	}
+	_hoverName = -1;
+}
+
 void HookEngine::drawSpeech(const Common::Rect &view) {
+	// 06D55: over an exit, the name of the room it leads to, while nobody talks and no
+	// sequence, pending action or conversation runs: the record's exit room n (first word) has
+	// its name at text ref DS:18CA[n - 1], centred at view x 168, y 60, in Peter's colour
+	if (_hoverName >= 0)
+		_font.drawString(*_screen->surfacePtr(), _hoverX - _scrollX, _hoverY - _scrollY, _hoverText,
+						 _res.image()[0x6E5C], view);
 	// 06BB1: Peter's line - from say() or from a sequence writing its text ref to [ABF7]
 	uint16 ref = dsWord(0xABF7);
 	if (!ref && !_speech.empty() && _speechPart < _speech.size())
