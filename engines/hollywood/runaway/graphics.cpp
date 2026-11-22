@@ -83,6 +83,43 @@ bool loadRunawayMask(ChunkArchive &archive, int width, int height, Common::Array
 	return offset == mask.size();
 }
 
+byte findRunawayLight(Common::Point position, int width, const Common::Array<byte> &mask, const Common::Array<byte> &maps) {
+	if (width <= 0 || mask.size() % width || maps.size() != 1536) {
+		return 0;
+	}
+	const int height = mask.size() / width;
+	if (position.x < 0 || position.x >= width || position.y < 0 || position.y >= height) {
+		return 0;
+	}
+	// Match the original fallback for gaps in the lighting map: search the
+	// column down/up, then the top row right/left.
+	for (int y = position.y; y < height; ++y) {
+		const byte light = maps[768 + mask[y * width + position.x]];
+		if (light) {
+			return light;
+		}
+	}
+	for (int y = position.y - 1; y >= 0; --y) {
+		const byte light = maps[768 + mask[y * width + position.x]];
+		if (light) {
+			return light;
+		}
+	}
+	for (int x = position.x + 1; x < width; ++x) {
+		const byte light = maps[768 + mask[x]];
+		if (light) {
+			return light;
+		}
+	}
+	for (int x = position.x - 1; x >= 0; --x) {
+		const byte light = maps[768 + mask[x]];
+		if (light) {
+			return light;
+		}
+	}
+	return 0;
+}
+
 bool applyRunawayPatch(const Common::Array<byte> &patch, Graphics::ManagedSurface &surface, int yOffset, int xOffset) {
 	if (patch.size() < 2 || surface.format.bytesPerPixel != 2)
 		return false;
@@ -287,18 +324,7 @@ bool RunawayActor::setFrame(uint facing, uint frame, int headFrame) {
 	const byte *descriptor = _descriptors.data() + (facing * kFrames + frame) * 32;
 	const Common::Array<byte> &bank = _banks[facing];
 	const uint end = frame + 1 < kFrames ? READ_LE_UINT32(descriptor + 32) : bank.size();
-	const int left = _anchorX - (int)READ_LE_UINT32(descriptor + 16);
-	const int top = _anchorY - (int)READ_LE_UINT32(descriptor + 20);
-	const uint width = READ_LE_UINT32(descriptor + 24), height = READ_LE_UINT32(descriptor + 28);
-	if (left < 0 || top < 0 || width > _width || height > _height ||
-			left + width > _width || top + height > _height)
-		return false;
-	_bounds = Common::Rect(left, top, left + width, top + height);
-	memset(_pixels.data(), 0, _pixels.size());
-	memset(_opacity.data(), 0, _opacity.size());
-	memset(_shadow.data(), 0, _shadow.size());
-	_facing = _frame = _headFrame = -1;
-	if (!decodeFrame(bank, descriptor, end, false))
+	if (!decodeBodyFrame(bank, descriptor, end))
 		return false;
 	if (headFrame >= 0) {
 		// Native 0x428560 maps eight body directions onto six head banks and
@@ -321,6 +347,61 @@ bool RunawayActor::setFrame(uint facing, uint frame, int headFrame) {
 	_frame = frame;
 	_headFrame = headFrame;
 	return true;
+}
+
+bool RunawayActor::loadAction(uint chunk, uint frames) {
+	// RESOURCE.001 has 216 banks, each preceded by 100 frame descriptors.
+	// The size table counts only the sprite data after those descriptors.
+	Common::File file;
+	if (_loadedModel < 0 || _museum || chunk >= 216 || !frames || frames > 100 || !file.open("RESOURCE.001")) {
+		return false;
+	}
+	file.seek(chunk * 4);
+	const uint32 offset = file.readUint32LE();
+	file.seek((216 + chunk) * 4);
+	const uint32 size = file.readUint32LE();
+	if (!offset || !size || (uint64)offset + 3200 + size > (uint64)file.size()) {
+		return false;
+	}
+	_actionDescriptors.resize(frames * 32);
+	_actionBank.resize(size);
+	file.seek(offset);
+	if (file.read(_actionDescriptors.data(), _actionDescriptors.size()) != _actionDescriptors.size() ||
+			!file.seek(offset + 3200) || file.read(_actionBank.data(), size) != size) {
+		return false;
+	}
+	const int facing = _facing;
+	for (uint frame = 0; frame < frames; ++frame) {
+		if (!setActionFrame(frame)) {
+			return false;
+		}
+	}
+	return setFrame(facing, 0);
+}
+
+bool RunawayActor::setActionFrame(uint frame) {
+	if (frame >= _actionDescriptors.size() / 32) {
+		return false;
+	}
+	const byte *descriptor = _actionDescriptors.data() + frame * 32;
+	const uint end = (frame + 1) * 32 < _actionDescriptors.size() ? READ_LE_UINT32(descriptor + 32) : _actionBank.size();
+	return decodeBodyFrame(_actionBank, descriptor, end);
+}
+
+bool RunawayActor::decodeBodyFrame(const Common::Array<byte> &bank, const byte *descriptor, uint end) {
+	const int left = _anchorX - (int)READ_LE_UINT32(descriptor + 16);
+	const int top = _anchorY - (int)READ_LE_UINT32(descriptor + 20);
+	const uint width = READ_LE_UINT32(descriptor + 24), height = READ_LE_UINT32(descriptor + 28);
+	if (left < 0 || top < 0 || width > _width || height > _height ||
+			left + width > _width || top + height > _height) {
+		return false;
+	}
+	_bounds = Common::Rect(left, top, left + width, top + height);
+	memset(_pixels.data(), 0, _pixels.size());
+	memset(_opacity.data(), 0, _opacity.size());
+	memset(_shadow.data(), 0, _shadow.size());
+	_facing = _frame = _headFrame = -1;
+	return decodeFrame(bank, descriptor, end, false);
 }
 
 bool RunawayActor::decodeFrame(const Common::Array<byte> &bank, const byte *descriptor, uint end, bool head) {
@@ -378,7 +459,7 @@ float RunawayActor::perspectiveHeight(Common::Point position) {
 void RunawayActor::draw(Graphics::ManagedSurface &surface, Common::Point position, int cameraX,
 		int roomTop, const Common::Array<byte> &mask, const Common::Array<byte> &maps, bool sunlit, bool antialias) const {
 	// Scene lighting and occlusion come from the same pixel lookup as hotspots.
-	const byte light = MIN<byte>(5, maps[768 + mask[position.y * 1376 + position.x]]);
+	const byte light = MIN<byte>(5, findRunawayLight(position, 1376, mask, maps));
 	byte lights[6][3] = { {100,100,100}, {55,50,45}, {55,50,45},
 		{85,80,75}, {75,70,65}, {70,65,60} };
 	if (sunlit) {
@@ -401,7 +482,8 @@ void RunawayActor::draw(Graphics::ManagedSurface &surface, const RenderParams &p
 	if (params.roomWidth <= 0 || mask.size() % params.roomWidth || maps.size() != 1536)
 		return;
 	const int roomHeight = mask.size() / params.roomWidth;
-	const int scale = CLIP<int>((int)(params.height * 256 / 455), 64, 256);
+	// Douglasville's distant street positions shrink Brian below quarter size.
+	const int scale = CLIP<int>((int)(params.height * 256 / 455), 1, 256);
 	const int roomTop = kRunawayViewportTop - params.camera.y;
 	const int originX = params.position.x - params.camera.x - _anchorX * scale / 256;
 	const int originY = params.position.y + roomTop - _anchorY * scale / 256;

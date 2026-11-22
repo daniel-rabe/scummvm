@@ -75,6 +75,47 @@ const FilmOverlay kFilmOverlays[] = {
 	{'D', 8, 0, 0, 6, 79, 67, 176, 170},
 	{'D', 10, 0, 0, 6, 180, 46, 698, 600},
 	{'D', 9, 0, 0, 12, 474, 36, 578, 234},
+	{'E', 2, 0, 0, 6, 490, 192, 586, 300},
+	{'E', 2, 1, 6, 6, 532, 38, 646, 172},
+	{'E', 2, 2, 12, 12, 627, 170, 840, 388},
+	{'E', 2, 3, 24, 12, 590, 240, 641, 296},
+	{'E', 2, 4, 36, 12, 426, 254, 480, 314},
+	{'E', 6, 0, 0, 12, 388, 196, 530, 408},
+	{'F', 1, 0, 0, 12, 644, 122, 704, 204},
+	{'F', 1, 1, 12, 12, 516, 104, 566, 170},
+	{'F', 2, 0, 0, 12, 618, 198, 668, 282},
+	{'F', 2, 1, 12, 6, 581, 164, 825, 534},
+	{'F', 2, 2, 18, 6, 329, 74, 406, 177},
+	{'F', 2, 3, 24, 6, 772, 278, 916, 506},
+	{'F', 2, 4, 30, 12, 584, 98, 632, 164},
+	{'G', 3, 0, 0, 6, 0, 0, 1024, 600},
+	{'G', 3, 1, 6, 6, 486, 196, 590, 334},
+	{'G', 3, 2, 12, 12, 452, 116, 590, 356},
+	{'G', 3, 3, 24, 6, 0, 0, 1024, 600},
+	{'G', 4, 0, 0, 6, 0, 0, 1024, 600},
+	{'H', 4, 0, 0, 12, 144, 118, 862, 600},
+	{'H', 4, 1, 12, 6, 396, 206, 767, 600},
+	{'H', 4, 2, 18, 12, 333, 128, 799, 600},
+	{'H', 7, 0, 0, 12, 0, 0, 288, 288},
+	{'H', 7, 1, 12, 12, 0, 0, 288, 288},
+	{'H', 7, 2, 24, 12, 0, 0, 288, 288},
+	{'H', 8, 0, 0, 12, 314, 122, 759, 600},
+	{'H', 8, 1, 12, 12, 285, 64, 743, 600},
+	{'H', 8, 2, 24, 12, 303, 100, 726, 600},
+	{'H', 9, 0, 0, 6, 456, 190, 608, 356},
+	{'H', 9, 1, 6, 6, 752, 190, 936, 376},
+	{'H', 9, 2, 12, 6, 112, 120, 280, 352},
+	{'I', 2, 0, 0, 12, 90, 79, 182, 181},
+	{'I', 2, 1, 12, 12, 382, 42, 484, 146},
+	{'I', 2, 2, 24, 6, 682, 150, 760, 260},
+	{'I', 2, 3, 30, 12, 608, 191, 688, 282},
+	{'I', 2, 4, 42, 12, 156, 123, 350, 371},
+	{'I', 2, 5, 54, 12, 405, 101, 712, 453},
+	{'I', 2, 6, 66, 12, 147, 15, 427, 329},
+	{'I', 2, 7, 78, 12, 457, 43, 798, 418},
+	{'I', 3, 0, 0, 12, 341, 103, 544, 352},
+	{'I', 3, 1, 12, 12, 309, 89, 586, 417},
+	{'I', 3, 2, 24, 6, 554, 238, 596, 290},
 };
 
 } // End of anonymous namespace
@@ -167,8 +208,48 @@ bool RunawayVideo::load(const char *name) {
 
 void RunawayVideo::close() {
 	_decoder.reset();
-	_frame = nullptr;
+	_frame = _decodedFrame = nullptr;
 	_data.clear();
+	_cachedFrames.clear();
+	_cacheBytes = 0;
+	_heldFrame.free();
+}
+
+bool RunawayVideo::isBink() const {
+	return _decoder && (READ_BE_UINT32(_data.data()) >> 8) == MKTAG(0, 'B', 'I', 'K');
+}
+
+void RunawayVideo::cacheFrames(uint first, uint last) {
+	if (!isBink() || first > last || last >= frameCount()) {
+		return;
+	}
+	_cachedFrames.resize(frameCount());
+	uint count = 0;
+	for (uint i = first; i <= last; ++i) {
+		if (!_cachedFrames[i].enabled) {
+			++count;
+		}
+	}
+	// Retain short shots revisited by the script, not entire long movies.
+	const uint64 bytes = (uint64)count * width() * height() * _frame->format.bytesPerPixel;
+	if (_cacheBytes + bytes > 64 * 1024 * 1024) {
+		return;
+	}
+	_cacheBytes += (uint32)bytes;
+	for (uint i = first; i <= last; ++i) {
+		_cachedFrames[i].enabled = true;
+		if ((int)i == _decoder->getCurFrame() && _decodedFrame) {
+			_cachedFrames[i].surface.copyFrom(*_decodedFrame);
+		}
+	}
+}
+
+bool RunawayVideo::useCachedFrame(uint frame) {
+	if (frame >= _cachedFrames.size() || !_cachedFrames[frame].surface.w) {
+		return false;
+	}
+	_frame = &_cachedFrames[frame].surface.rawSurface();
+	return true;
 }
 
 uint RunawayVideo::frameAtTime(uint32 milliseconds) const {
@@ -182,11 +263,14 @@ uint RunawayVideo::frameAtTime(uint32 milliseconds) const {
 bool RunawayVideo::seekToFrame(uint frame) {
 	if (!_decoder || frame >= _decoder->getFrameCount())
 		return false;
+	if (useCachedFrame(frame)) {
+		return true;
+	}
 	// Keep Bink's decoded reference frames for forward seeks. The GOG movies
 	// have only an initial keyframe, so seeking would decode them from scratch.
 	if (_decoder->getCurFrame() != (int)frame &&
 			(_decoder->getCurFrame() > (int)frame || READ_BE_UINT32(_data.data()) == MKTAG('R', 'I', 'F', 'F'))) {
-		_frame = nullptr;
+		_frame = _decodedFrame = nullptr;
 		if (!_decoder->seekToFrame(frame))
 			return false;
 	}
@@ -196,18 +280,76 @@ bool RunawayVideo::seekToFrame(uint frame) {
 bool RunawayVideo::decodeToFrame(uint frame) {
 	if (!_decoder || frame >= _decoder->getFrameCount())
 		return false;
+	if (useCachedFrame(frame)) {
+		return true;
+	}
 	if (_decoder->getCurFrame() > (int)frame)
 		return seekToFrame(frame);
+	return decodeFrames(frame);
+}
+
+bool RunawayVideo::decodeFrames(uint frame) {
 	while (_decoder->getCurFrame() < (int)frame && !_decoder->endOfVideo()) {
+		const int previousFrame = _decoder->getCurFrame();
 		const Graphics::Surface *decoded = _decoder->decodeNextFrame();
-		if (decoded)
-			_frame = decoded;
-		else {
+		if (decoded && _decoder->getCurFrame() > previousFrame) {
+			_decodedFrame = decoded;
+			const uint decodedNumber = _decoder->getCurFrame();
+			if (decodedNumber < _cachedFrames.size() && _cachedFrames[decodedNumber].enabled) {
+				_cachedFrames[decodedNumber].surface.copyFrom(*decoded);
+			}
+		} else {
 			warning("Runaway: unable to decode video frame %d", _decoder->getCurFrame());
 			return false;
 		}
 	}
+	_frame = _decodedFrame;
 	return _frame != nullptr && _decoder->getCurFrame() == (int)frame;
+}
+
+RunawayVideo::FrameStatus RunawayVideo::prepareFrame(uint frame, uint maxFrames) {
+	if (!_decoder || frame >= _decoder->getFrameCount()) {
+		return kFrameError;
+	}
+	if (useCachedFrame(frame)) {
+		return kFrameReady;
+	}
+	if (_decodedFrame && _decoder->getCurFrame() == (int)frame) {
+		_frame = _decodedFrame;
+		return kFrameReady;
+	}
+	if (!maxFrames) {
+		return kFramePending;
+	}
+	if (_decoder->getCurFrame() > (int)frame) {
+		_frame = _decodedFrame = nullptr;
+		// Seeking directly to the target can decode the whole movie without yielding.
+		if (!_decoder->seekToFrame(0)) {
+			return kFrameError;
+		}
+	}
+	const uint next = MIN<int64>(frame, (int64)_decoder->getCurFrame() + maxFrames);
+	if (!decodeFrames(next)) {
+		return kFrameError;
+	}
+	return next == frame ? kFrameReady : kFramePending;
+}
+
+RunawayVideo::FrameStatus RunawayVideo::prefetchFrame(uint frame, uint maxFrames) {
+	const Graphics::Surface *displayed = _frame;
+	const FrameStatus status = prepareFrame(frame, 0);
+	_frame = displayed;
+	if (status != kFramePending || !maxFrames) {
+		return status;
+	}
+	// Decoding ahead must not overwrite the still currently behind a speaker.
+	if (displayed && displayed == _decodedFrame) {
+		_heldFrame.copyFrom(*displayed);
+		displayed = &_heldFrame.rawSurface();
+	}
+	const FrameStatus prepared = prepareFrame(frame, maxFrames);
+	_frame = displayed;
+	return prepared;
 }
 
 void RunawayVideo::draw(Graphics::ManagedSurface &surface, const Common::Rect &destination) const {
@@ -223,55 +365,94 @@ void RunawayVideo::drawRegion(Graphics::ManagedSurface &surface, const Common::R
 bool RunawayFilmPortrait::load(char chapter, uint movie) {
 	if (_loaded && _chapter == chapter && _movie == movie)
 		return true;
+	close();
 	_chapter = chapter;
 	_movie = movie;
-	_video.close();
-	_faces.clear();
-	_loadedPortrait = -1;
 	const Common::String name = Common::String::format("DATAV%c%02u.000", chapter, movie);
-	if (Common::File::exists(Common::Path(name)))
+	if (Common::File::exists(Common::Path(name))) {
 		_loaded = _video.load(name.c_str());
-	else
+		for (uint i = 0; _loaded && i < ARRAYSIZE(kFilmOverlays); ++i) {
+			const FilmOverlay &overlay = kFilmOverlays[i];
+			if (overlay.chapter != chapter || overlay.movie != movie) {
+				continue;
+			}
+			if (overlay.portrait >= _portraits.size()) {
+				_portraits.resize(overlay.portrait + 1);
+			}
+			Portrait &portrait = _portraits[overlay.portrait];
+			portrait.firstFrame = overlay.first;
+			portrait.bounds = Common::Rect(overlay.left, overlay.top, overlay.right, overlay.bottom);
+			portrait.faces.resize(overlay.count);
+		}
+	} else {
 		_loaded = _archive.open(Common::Path(Common::String::format("DATAV%c%02u.002", chapter, movie)), 40);
+	}
 	return _loaded;
 }
 
-bool RunawayFilmPortrait::draw(Graphics::ManagedSurface &surface, const Common::Rect &destination, uint portrait, uint mouth) {
+void RunawayFilmPortrait::close() {
+	_video.close();
+	_archive.close();
+	_portraits.clear();
+	_portrait.free();
+	_talking.free();
+	_loaded = false;
+	_loadedPortrait = -1;
+	_preparedFrames = 0;
+}
+
+RunawayVideo::FrameStatus RunawayFilmPortrait::prepare(uint portrait, uint maxFrames) {
 	if (_video.frameCount()) {
-		if (_loadedPortrait != (int)portrait) {
-			const FilmOverlay *overlay = nullptr;
-			for (uint i = 0; i < ARRAYSIZE(kFilmOverlays); ++i) {
-				if (kFilmOverlays[i].chapter == _chapter && kFilmOverlays[i].movie == _movie && kFilmOverlays[i].portrait == portrait)
-					overlay = &kFilmOverlays[i];
-			}
-			if (!overlay)
-				return false;
-			_faceRect = Common::Rect(overlay->left, overlay->top, overlay->right, overlay->bottom);
-			_faces.resize(overlay->count);
-			for (uint i = 0; i < _faces.size(); ++i) {
-				if (!_video.decodeToFrame(overlay->first + i))
-					return false;
-				_faces[i].create(_faceRect.width(), _faceRect.height(), surface.format);
-				_video.drawRegion(_faces[i], _faceRect, Common::Rect(_faceRect.width(), _faceRect.height()));
-			}
-			_loadedPortrait = portrait;
+		if (portrait >= _portraits.size() || _portraits[portrait].faces.empty()) {
+			return RunawayVideo::kFrameError;
 		}
-		const Common::Rect target(destination.left + _faceRect.left * destination.width() / _video.width(),
-			destination.top + _faceRect.top * destination.height() / _video.height(),
-			destination.left + _faceRect.right * destination.width() / _video.width(),
-			destination.top + _faceRect.bottom * destination.height() / _video.height());
-		surface.blitFrom(_faces[mouth % _faces.size()], Common::Rect(_faceRect.width(), _faceRect.height()), target);
-		return true;
+		const uint endFrame = _portraits[portrait].firstFrame + _portraits[portrait].faces.size();
+		const Graphics::PixelFormat format(2, 5, 6, 5, 0, 11, 5, 0, 0);
+		for (uint i = 0; i < maxFrames && _preparedFrames < endFrame; ++i) {
+			if (!_video.decodeToFrame(_preparedFrames)) {
+				return RunawayVideo::kFrameError;
+			}
+			// Keep every face passed on the way to this speaker. Switching back
+			// must not rewind the single-keyframe movie and decode it again.
+			for (uint j = 0; j < _portraits.size(); ++j) {
+				Portrait &pose = _portraits[j];
+				if (_preparedFrames < pose.firstFrame || _preparedFrames >= pose.firstFrame + pose.faces.size()) {
+					continue;
+				}
+				Graphics::ManagedSurface &face = pose.faces[_preparedFrames - pose.firstFrame];
+				face.create(pose.bounds.width(), pose.bounds.height(), format);
+				_video.drawRegion(face, pose.bounds, Common::Rect(face.w, face.h));
+			}
+			++_preparedFrames;
+		}
+		return _preparedFrames >= endFrame ? RunawayVideo::kFrameReady : RunawayVideo::kFramePending;
 	}
 	if (_loadedPortrait != (int)portrait) {
 		Common::Array<byte> patch;
-		const bool phone = _chapter == 'D' && _movie == 8;
+		const bool phone = (_chapter == 'D' && _movie == 8) || (_chapter == 'H' && _movie == 7);
 		_portrait.create(phone ? 288 : 512, phone ? 288 : 300, Graphics::PixelFormat(2, 5, 6, 5, 0, 11, 5, 0, 0));
 		_talking.create(_portrait.w, _portrait.h, _portrait.format);
 		if (!_archive.readVariableChunk(portrait * 2, patch) || !applyRunawayPatch(patch, _portrait) ||
-				!_mouth.load(_archive, portrait * 2 + 1, 12))
-			return false;
+				!_mouth.load(_archive, portrait * 2 + 1, 12)) {
+			return RunawayVideo::kFrameError;
+		}
 		_loadedPortrait = portrait;
+	}
+	return RunawayVideo::kFrameReady;
+}
+
+bool RunawayFilmPortrait::draw(Graphics::ManagedSurface &surface, const Common::Rect &destination, uint portrait, uint mouth) {
+	if (prepare(portrait, _video.frameCount()) != RunawayVideo::kFrameReady) {
+		return false;
+	}
+	if (_video.frameCount()) {
+		const Portrait &pose = _portraits[portrait];
+		const Common::Rect target(destination.left + pose.bounds.left * destination.width() / _video.width(),
+			destination.top + pose.bounds.top * destination.height() / _video.height(),
+			destination.left + pose.bounds.right * destination.width() / _video.width(),
+			destination.top + pose.bounds.bottom * destination.height() / _video.height());
+		surface.blitFrom(pose.faces[mouth % pose.faces.size()], Common::Rect(pose.bounds.width(), pose.bounds.height()), target);
+		return true;
 	}
 	_talking.blitFrom(_portrait);
 	_mouth.draw(_talking, mouth, 0, 0);

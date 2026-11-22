@@ -31,41 +31,44 @@
 #include "hollywood/runaway/strings.h"
 
 namespace Hollywood {
+namespace Runaway {
 namespace {
 
 struct SceneHotspot {
 	int x, y;
 	byte facing;
+	bool approach[2];
+	Common::Point lookPosition;
 };
 
-// Approach points and facings from the scene initializer at 0x439e40. The
-// hit regions themselves are decoded from E03; these are not bounding boxes.
+// Approach points and facings from demo initializer 0x439e40, with approach
+// flags and look targets from retail 0x479ea0. The hit regions are decoded from E03.
 const SceneHotspot kHotspots[] = {
-	{0, 0, 0},
-	{101, 507, 7},
-	{101, 507, 7},
-	{406, 383, 0},
-	{1062, 473, 1},
-	{942, 407, 0},
-	{1215, 542, 7},
-	{406, 383, 7},
-	{1062, 473, 7},
-	{1019, 405, 0},
-	{1215, 542, 7},
-	{1215, 542, 7},
-	{495, 381, 7},
-	{873, 409, 1},
-	{974, 406, 7},
-	{262, 426, 0},
-	{262, 426, 7},
-	{609, 379, 1},
-	{1062, 473, 1},
-	{1215, 542, 7}
+	{0, 0, 0, {false, false}, {0, 0}},
+	{101, 507, 7, {true, false}, {42, 451}},
+	{101, 507, 7, {true, true}, {42, 451}},
+	{406, 383, 0, {false, false}, {406, 360}},
+	{1062, 473, 1, {false, false}, {1212, 459}},
+	{942, 407, 0, {true, true}, {942, 385}},
+	{1215, 542, 7, {true, true}, {1169, 479}},
+	{406, 383, 7, {true, false}, {371, 336}},
+	{1062, 473, 7, {false, false}, {1100, 450}},
+	{1019, 405, 0, {true, true}, {1019, 375}},
+	{1215, 542, 7, {true, true}, {1271, 477}},
+	{1215, 542, 7, {true, true}, {1100, 427}},
+	{495, 381, 7, {false, false}, {545, 362}},
+	{873, 409, 1, {false, false}, {844, 385}},
+	{974, 406, 7, {false, true}, {974, 380}},
+	{262, 426, 0, {true, false}, {253, 399}},
+	{262, 426, 7, {false, true}, {208, 400}},
+	{609, 379, 1, {true, true}, {652, 360}},
+	{1062, 473, 1, {false, true}, {1100, 450}},
+	{1215, 542, 7, {false, false}, {0, 0}}
 };
 
 } // End of anonymous namespace
 
-bool RunawayScene5030::load(uint16 entryScene) {
+bool Scene5030::load(uint16 entryScene) {
 	if (entryScene != 5030 && !(_game == kRunawayFullGame && entryScene >= 5031 && entryScene <= 5032))
 		return false;
 	_entryScene = entryScene;
@@ -101,7 +104,7 @@ bool RunawayScene5030::load(uint16 entryScene) {
 	return true;
 }
 
-bool RunawayScene5030::loadRoomGraphics() {
+bool Scene5030::loadRoomGraphics() {
 	Common::Array<byte> pixels, overlay, patch;
 	if (!_archive.readVariableChunk(_windowClean ? 4 : 0, pixels) ||
 			pixels.size() != kRoomWidth * kRoomHeight * 2 ||
@@ -153,19 +156,28 @@ bool RunawayScene5030::loadRoomGraphics() {
 	return true;
 }
 
-void RunawayScene5030::start(uint32 now) {
+void Scene5030::start(uint32 now) {
 	_now = _lastUpdate = now;
+	_entering = true;
 	resume();
 	if (_entryScene == 5030)
 		startAction(kIntroVideo);
 }
 
-void RunawayScene5030::resume() {
+void Scene5030::resume() {
 	if (!_audio.musicPlaying())
 		_audio.playMusic(11);
+	if (_entering) {
+		_entering = false;
+		if (_entryScene == 5031) {
+			setPosition(Common::Point(1215, 542), 3);
+			setCameraX(_position.x - kScreenWidth / 2);
+			startAction(kEnterHatch);
+		}
+	}
 }
 
-void RunawayScene5030::captureState(RunawaySaveState &state) const {
+void Scene5030::captureState(RunawaySaveState &state) const {
 	state.scene = _entryScene;
 	state.x = _position.x;
 	state.y = _position.y;
@@ -186,7 +198,7 @@ void RunawayScene5030::captureState(RunawaySaveState &state) const {
 	state.randomSeed = _random.getSeed();
 }
 
-bool RunawayScene5030::restoreState(const RunawaySaveState &state, uint32 now, bool entering) {
+bool Scene5030::restoreState(const RunawaySaveState &state, uint32 now, bool entering) {
 	if (!state.valid() || state.game != _game || state.scene != _entryScene)
 		return false;
 	_lidOpen = state.lidOpen;
@@ -207,6 +219,7 @@ bool RunawayScene5030::restoreState(const RunawaySaveState &state, uint32 now, b
 	_video.close();
 	_random.setSeed(state.randomSeed);
 	_now = _lastUpdate = _actionStarted = now;
+	_entering = entering;
 	_walkElapsed = _lastFootstep = _step = 0;
 	_action = _afterSpeech = _afterWalk = kNone;
 	_pendingHotspot = _pendingItem = _pickupHotspot = 0;
@@ -220,11 +233,11 @@ bool RunawayScene5030::restoreState(const RunawaySaveState &state, uint32 now, b
 	return _actor.setFrame(_facing, 0, 0);
 }
 
-void RunawayScene5030::setCameraX(int x) {
+void Scene5030::setCameraX(int x) {
 	_cameraX = CLIP<int>(x, 0, kRoomWidth - kScreenWidth);
 }
 
-bool RunawayScene5030::loadPatch(uint chunk, Common::Array<byte> &patch) {
+bool Scene5030::loadPatch(uint chunk, Common::Array<byte> &patch) {
 	if (!_archive.readVariableChunk(chunk, patch) || patch.size() < 2)
 		return false;
 	uint cursor = 2;
@@ -241,7 +254,7 @@ bool RunawayScene5030::loadPatch(uint chunk, Common::Array<byte> &patch) {
 	return cursor == patch.size();
 }
 
-void RunawayScene5030::drawPatch(const Common::Array<byte> &patch) {
+void Scene5030::drawPatch(const Common::Array<byte> &patch) {
 	if (patch.empty())
 		return;
 	const byte *run = patch.data() + 2;
@@ -255,14 +268,14 @@ void RunawayScene5030::drawPatch(const Common::Array<byte> &patch) {
 	}
 }
 
-void RunawayScene5030::applyPatch(uint chunk) {
+void Scene5030::applyPatch(uint chunk) {
 	Common::Array<byte> patch;
 	if (!loadPatch(chunk, patch))
 		error("Cannot load Runaway room patch %u", chunk);
 	drawPatch(patch);
 }
 
-byte RunawayScene5030::hotspotAt(Common::Point mouse) const {
+byte Scene5030::hotspotAt(Common::Point mouse) const {
 	if (mouse.x < 0 || mouse.x >= kScreenWidth || mouse.y < kRoomTop || mouse.y >= kRoomTop + kRoomHeight)
 		return 0;
 	byte id = _maps[256 + _mask[(mouse.y - kRoomTop) * kRoomWidth + mouse.x + _cameraX]];
@@ -290,14 +303,14 @@ byte RunawayScene5030::hotspotAt(Common::Point mouse) const {
 	return id < ARRAYSIZE(kHotspots) && !_pickedUp[id] ? id : 0;
 }
 
-void RunawayScene5030::walkTo(Common::Point target) {
+void Scene5030::walkTo(Common::Point target) {
 	_walkPath.findPath(RunawayWalkMap(kRoomWidth, kRoomHeight, _mask, _maps), target);
 	_walkElapsed = _lastFootstep = 0;
 	if (!_walkPath.active())
 		arrive();
 }
 
-void RunawayScene5030::say(uint16 row) {
+void Scene5030::say(uint16 row) {
 	stopSpeech();
 	if (row < 500 || row - 500U >= _voiceSamples.size())
 		return;
@@ -307,7 +320,7 @@ void RunawayScene5030::say(uint16 row) {
 	showSpeechRow();
 }
 
-void RunawayScene5030::showSpeechRow() {
+void Scene5030::showSpeechRow() {
 	const uint16 sample = _globalSpeech ? _speechSample : _voiceSamples[_speechRow - 500];
 	_speech.start(Common::U32String(_text.largeTextRecord(_speechRow), Common::kDos850), sample, _globalSpeech, _now);
 	_idleHead.reset(_now);
@@ -315,18 +328,41 @@ void RunawayScene5030::showSpeechRow() {
 		_speechRow, sample, _speechEnd);
 }
 
-void RunawayScene5030::stopSpeech() {
+void Scene5030::stopSpeech() {
 	_speech.stop();
 	_speechRow = _speechEnd = 0;
+	_nextInventoryReply = RunawayInventory::Reply(0);
 }
 
-Common::U32String RunawayScene5030::actionCaption(byte id, RunawayVerb verb, byte item) const {
+Common::U32String Scene5030::hotspotName(byte id) const {
 	Common::U32String name = _strings.shackHotspotName(id);
 	if (id < ARRAYSIZE(kHotspots) && _examined[id]) {
-		if (id == 5 || id == 9 || id == 17)
+		if (id == 5 || id == 9 || id == 17) {
 			name = _inventory.name(id == 5 ? 8 : id == 9 ? 1 : 3);
-		else if (id == 7)
+		} else if (id == 7) {
 			name = _strings.text(RunawayStrings::kShirt);
+		}
+	}
+	return name;
+}
+
+Common::U32String Scene5030::actionCaption(byte id, RunawayVerb verb, byte item) const {
+	const Common::U32String name = hotspotName(id);
+	if (_game == kRunawayFullGame && id) {
+		const char *variant = nullptr;
+		if (item == 2 && id == 6 && _hatchState >= kUnlocked) {
+			variant = "unlocked";
+		} else if (!item && verb != kVerbLook) {
+			if ((id == 6 && _hatchState == kOpen) || (id == 18 && _lidOpen)) {
+				variant = "open";
+			} else if (id == 11 && _ice == kDrained) {
+				variant = "closed";
+			}
+		}
+		const Common::U32String pattern = _strings.sceneActionCaption(5030, id, item, verb == kVerbLook, variant);
+		if (!pattern.empty()) {
+			return RunawayStrings::formatActionCaption(pattern, _inventory.name(item), name);
+		}
 	}
 	if (item) {
 		Common::U32String caption = _strings.text(RunawayStrings::kUse) + _inventory.name(item);
@@ -360,11 +396,12 @@ Common::U32String RunawayScene5030::actionCaption(byte id, RunawayVerb verb, byt
 	return _strings.text(action) + name;
 }
 
-void RunawayScene5030::sayInventory(const RunawayInventory::Reply &reply) {
+void Scene5030::sayInventory(const RunawayInventory::Reply &reply) {
+	const RunawayInventory::Reply speech = reply.action == 1 || reply.action == 5 ? RunawayInventory::randomReply(_random) : reply;
 	stopSpeech();
 	uint16 row, sample;
 	byte count;
-	if (!_text.getStaticSpeechCue(reply.cue, reply.variation, row, count, sample))
+	if (!_text.getStaticSpeechCue(speech.cue, speech.variation, row, count, sample))
 		return;
 	if (!row || row + MAX<uint>(1, count) > _text._inventoryOwnerLargeRows.size() / 321 ||
 			sample + MAX<uint>(1, count) > 6000)
@@ -373,16 +410,19 @@ void RunawayScene5030::sayInventory(const RunawayInventory::Reply &reply) {
 	_speechRow = row;
 	_speechEnd = row + MAX<uint>(1, count) - 1;
 	_speechSample = sample;
+	if (speech.nextVariation != 0xff) {
+		_nextInventoryReply = RunawayInventory::Reply(speech.cue, speech.nextVariation);
+	}
 	showSpeechRow();
 }
 
-void RunawayScene5030::sayCue(uint16 cue, byte variation) {
+void Scene5030::sayCue(uint16 cue, byte variation) {
 	const SceneSpeechCue speech = _text.stageCue(cue, variation);
 	if (speech.valid())
 		say(speech.textRecordId);
 }
 
-void RunawayScene5030::skipSpeech() {
+void Scene5030::skipSpeech() {
 	if (_action == kPeekConversation) {
 		_interrogation.skipSpeech();
 		return;
@@ -395,29 +435,33 @@ void RunawayScene5030::skipSpeech() {
 		if (_globalSpeech)
 			++_speechSample;
 		showSpeechRow();
+	} else if (_nextInventoryReply.cue) {
+		const RunawayInventory::Reply next = _nextInventoryReply;
+		sayInventory(next);
 	} else {
 		stopSpeech();
 	}
 }
 
-void RunawayScene5030::cancelWalk() {
+void Scene5030::cancelWalk() {
 	_walkPath.clear();
 	_pendingHotspot = _pendingItem = 0;
 	_committedCaption.clear();
 }
 
-void RunawayScene5030::playWalkFootstep() {
+void Scene5030::playWalkFootstep() {
 	// The sixth E03 lookup table selects the walking surface (native
 	// 0x4282e2). Zero is silent; the shack uses surface 3. Volume follows
 	// the native actor-height / 455 ratio, so distant steps are quieter.
 	const byte surface = _maps[1280 + _mask[_position.y * kRoomWidth + _position.x]];
 	const uint volume = CLIP<int>((int)(RunawayActor::perspectiveHeight(_position) * 100 / 455), 0, 100);
-	if (surface >= 1 && surface <= 7)
-		_audio.playFootstep(surface, _random.getRandomBit(), volume * 255 / 100);
+	if (surface >= 1 && surface <= 7) {
+		_audio.playFootstep(surface, _random.getRandomBit(), volume * 255 / 100, _position.x);
+	}
 	_lastFootstep = _walkElapsed;
 }
 
-void RunawayScene5030::click(Common::Point mouse, RunawayVerb verb, byte item) {
+void Scene5030::click(Common::Point mouse, RunawayVerb verb, byte item) {
 	if (_action != kNone || speaking() || mouse.y < kRoomTop || mouse.y >= kRoomTop + kRoomHeight)
 		return;
 	const byte id = hotspotAt(mouse);
@@ -427,13 +471,28 @@ void RunawayScene5030::click(Common::Point mouse, RunawayVerb verb, byte item) {
 	_pendingItem = item;
 	_pendingVerb = verb;
 	_committedCaption = actionCaption(id, verb, item);
+	if (_game == kRunawayFullGame && id) {
+		bool approach = kHotspots[id].approach[verb == kVerbLook ? 0 : 1];
+		if (item) {
+			approach = (item == 1 && id == 4) || (item == 2 && id == 6) || (item == 6 && id == 8);
+		} else if (verb == kVerbLook && (id == 5 || id == 7 || id == 9 || id == 15 || id == 17)) {
+			approach = !_examined[id];
+		}
+		if (!approach) {
+			const Common::Point target = id == 8 && _coolerMoved ? Common::Point(1128, 406) : kHotspots[id].lookPosition;
+			_facing = runawayFacingTo(_position, target);
+			_walkPath.clear();
+			arrive(false);
+			return;
+		}
+	}
 	const Common::Point target = id == 8 && _coolerMoved ? Common::Point(1054, 448) :
 		id ? Common::Point(kHotspots[id].x, kHotspots[id].y) :
 		Common::Point(mouse.x + _cameraX, mouse.y - kRoomTop);
 	walkTo(target);
 }
 
-void RunawayScene5030::pickUp(byte hotspot, byte item, uint patch) {
+void Scene5030::pickUp(byte hotspot, byte item, uint patch) {
 	if (!_inventory.add(item))
 		return;
 	_pickedUp[hotspot] = true;
@@ -444,16 +503,17 @@ void RunawayScene5030::pickUp(byte hotspot, byte item, uint patch) {
 		sayInventory(RunawayInventory::Reply(18, _random.getRandomNumber(2)));
 }
 
-void RunawayScene5030::useItem(byte item, byte hotspot) {
+void Scene5030::useItem(byte item, byte hotspot) {
 	_inventory.select(0);
 	if (!_inventory.contains(item))
 		return;
 	// Dispatch the room's item actions separately from its ordinary verbs.
 	// Original rejected actions use the shared, voiced inventory responses.
 	if (item == 1 && hotspot == 3) {
-		// The large window is never cleaned; cue 33 belongs to the small one.
+		// 339: Use the chamois with the large window.
 		sayCue(35, 0);
 	} else if (item == 1 && hotspot == 4) {
+		// 337: Clean the small window with the damp chamois.
 		if (_windowClean) {
 			sayCue(33, 3);
 		} else if (!_inventory.clothState()) {
@@ -467,77 +527,102 @@ void RunawayScene5030::useItem(byte item, byte hotspot) {
 			sayCue(33, 1);
 		}
 	} else if (item == 3 && hotspot == 4) {
+		// 343: Use the cleaner with the small window.
 		sayCue(39, 0);
 	} else if (item == 2 && hotspot == 4) {
+		// 342: Use the crowbar with the small window.
 		sayCue(38, 0);
 	} else if (item == 2 && hotspot == 6) {
+		// 338: Pry the padlock off the trap door.
 		if (_hatchState == kLocked)
 			waitForSpeech(34, 0, kPryHatch);
 		else
 			sayCue(34, _hatchState == kUnlocked ? 2 : 3);
+	} else if (_game == kRunawayFullGame && item == 4 && hotspot == 8) {
+		// 340: Use butter with the freezer.
+		sayCue(36, 0);
+	} else if (_game == kRunawayFullGame && item == 6 && hotspot == 8) {
+		// 341: Heat the helmet's contents on the sunlit freezer lid.
+		switch (_inventory.desert().helmet) {
+		case 0:
+		case 4:
+			sayCue(37, 0);
+			break;
+		case 1:
+			sayCue(37, 1);
+			break;
+		case 2:
+			waitForSpeech(37, 2, kHeatHelmet);
+			break;
+		case 3:
+			sayCue(37, 4);
+			break;
+		default:
+			break;
+		}
 	} else {
-		sayInventory(RunawayInventory::Reply(1, 0));
+		sayInventory(_game == kRunawayFullGame ? RunawayInventory::Reply::fromAction(1) : RunawayInventory::Reply());
 	}
 }
 
-void RunawayScene5030::examine(byte id) {
+void Scene5030::examine(byte id) {
 	const bool examined = _examined[id];
 	_examined[id] = true;
 	switch (id) {
-	case 1:
+	case 1: // Look at the door.
 		sayCue(1, _peeked ? 1 : 0);
 		break;
-	case 2:
+	case 2: // Look through the crack in the door.
 		startAction(kPeekDoor);
 		break;
-	case 3:
+	case 3: // Look through the large window.
 		sayCue(5, 0);
 		break;
-	case 4:
+	case 4: // Look through the small window.
 		sayCue(7, _windowClean ? 1 : 0);
 		break;
-	case 5:
+	case 5: // Look at the wooden peg.
 		sayCue(9, examined ? 1 : 0);
 		break;
-	case 6:
+	case 6: // Look at the trap door.
 		sayCue(_hatchState == kOpen ? 12 : 10, _hatchState == kUnlocked ? 1 : 0);
 		break;
-	case 7:
+	case 7: // Look at Brian's torn shirt.
 		sayCue(27, examined ? 1 : 0);
 		break;
-	case 8:
+	case 8: // Look at the freezer and its contents.
 		_coolerInspected |= _lidOpen;
 		sayCue(13, _coolerMoved ? 0 : !_lidOpen ? 1 : _ice == kDrained ? 6 :
 			_ice == kMelted ? 5 : _windowClean ? (_unplugged ? 5 : 4) : (_unplugged ? 3 : 2));
 		break;
-	case 9:
+	case 9: // Look at the chamois.
 		sayCue(15, examined ? 1 : 0);
 		break;
-	case 10:
+	case 10: // Look at the power plug.
 		sayCue(16, 0);
 		break;
-	case 11:
+	case 11: // Look at the freezer drain.
 		sayCue(18, 0);
 		break;
-	case 12:
+	case 12: // Look at the telephone.
 		sayCue(21, 0);
 		break;
-	case 13:
+	case 13: // Look at the shelf.
 		sayCue(23, 0);
 		break;
-	case 14:
+	case 14: // Look at the crowbar.
 		sayCue(25, 0);
 		break;
-	case 15:
+	case 15: // Look at Brian's broken glasses.
 		sayCue(40, 0);
 		break;
-	case 16:
+	case 16: // Look at the bellows.
 		sayCue(29, 0);
 		break;
-	case 17:
+	case 17: // Look at the cleaner.
 		sayCue(30, examined ? 1 : 0);
 		break;
-	case 18:
+	case 18: // Look at the freezer lid.
 		sayCue(32, _lidOpen ? 1 : 0);
 		break;
 	default:
@@ -545,7 +630,7 @@ void RunawayScene5030::examine(byte id) {
 	}
 }
 
-void RunawayScene5030::collect(byte hotspot) {
+void Scene5030::collect(byte hotspot) {
 	_pickupHotspot = hotspot;
 	if (!_examined[hotspot] && (hotspot == 5 || hotspot == 9 || hotspot == 17)) {
 		_examined[hotspot] = true;
@@ -555,26 +640,26 @@ void RunawayScene5030::collect(byte hotspot) {
 	}
 }
 
-void RunawayScene5030::waitForSpeech(uint16 cue, byte variation, Action next) {
+void Scene5030::waitForSpeech(uint16 cue, byte variation, Action next) {
 	startAction(kWaitSpeech);
 	_afterSpeech = next;
 	sayCue(cue, variation);
 }
 
-void RunawayScene5030::walkForAction(Common::Point target, byte facing, Action next) {
+void Scene5030::walkForAction(Common::Point target, byte facing, Action next) {
 	startAction(kWalkingAction);
 	_afterWalk = next;
 	_actionFacing = facing;
 	walkTo(target);
 }
 
-void RunawayScene5030::setPosition(Common::Point position, byte facing) {
+void Scene5030::setPosition(Common::Point position, byte facing) {
 	_position = position;
 	_walkPath.reset(position);
 	_facing = facing;
 }
 
-void RunawayScene5030::arrive() {
+void Scene5030::arrive(bool faceHotspot) {
 	if (_action == kWalkingAction) {
 		_facing = _actionFacing;
 		startAction(_afterWalk);
@@ -585,7 +670,9 @@ void RunawayScene5030::arrive() {
 	_committedCaption.clear();
 	if (!id)
 		return;
-	_facing = kHotspots[id].facing;
+	if (faceHotspot) {
+		_facing = kHotspots[id].facing;
+	}
 	if (item) {
 		useItem(item, id);
 	} else if (_pendingVerb == kVerbLook) {
@@ -633,7 +720,7 @@ void RunawayScene5030::arrive() {
 	}
 }
 
-void RunawayScene5030::startAction(Action action) {
+void Scene5030::startAction(Action action) {
 	_action = action;
 	_actionStarted = _now;
 	_step = 0;
@@ -660,19 +747,19 @@ void RunawayScene5030::startAction(Action action) {
 	case kPickup:
 		_action = kNone;
 		switch (_pickupHotspot) {
-		case 5:
+		case 5: // Take the wooden peg.
 			pickUp(5, 8, 0);
 			break;
-		case 9:
+		case 9: // Take the chamois.
 			pickUp(9, 1, 1);
 			break;
-		case 14:
+		case 14: // Take the crowbar.
 			pickUp(14, 2, 2);
 			break;
-		case 16:
+		case 16: // Take the bellows.
 			pickUp(16, 24, 3);
 			break;
-		case 17:
+		case 17: // Take the cleaner.
 			pickUp(17, 3, 4);
 			break;
 		default:
@@ -736,6 +823,10 @@ void RunawayScene5030::startAction(Action action) {
 		chunk = 35;
 		frames = 37;
 		break;
+	case kEnterHatch: // Climb back into the cabin through the trap door.
+		chunk = 34;
+		frames = 32;
+		break;
 	case kPeekDoor:
 		chunk = 22;
 		frames = 19;
@@ -743,6 +834,20 @@ void RunawayScene5030::startAction(Action action) {
 	case kReturnFromPeek:
 		chunk = 22;
 		frames = 19;
+		break;
+	case kHeatHelmet:
+		chunk = 31;
+		frames = 69;
+		break;
+	case kPrepareStirringHelmet:
+		_facing = 4;
+		waitForSpeech(37, 6, kStirHelmet);
+		break;
+	case kStirHelmet:
+		if (!loadRoomGraphics())
+			error("Cannot rebuild Runaway room before stirring the helmet");
+		chunk = 31;
+		frames = 69;
 		break;
 	default:
 		break;
@@ -752,7 +857,7 @@ void RunawayScene5030::startAction(Action action) {
 	debugC(1, kDebugScene, "Runaway demo: animation %u started", (uint)action);
 }
 
-void RunawayScene5030::finishAction() {
+void Scene5030::finishAction() {
 	const Action completed = _action;
 	_action = kNone;
 	if (completed == kIntroVideo) {
@@ -824,17 +929,24 @@ void RunawayScene5030::finishAction() {
 		_facing = 4;
 		sayCue(_peeked ? 3 : 1, _peeked ? _random.getRandomNumber(3) : 1);
 		_peeked = true;
+	} else if (completed == kHeatHelmet) {
+		applyPatch(25);
+		waitForSpeech(37, 5, kPrepareStirringHelmet);
+	} else if (completed == kStirHelmet) {
+		_audio.stopEffect();
+		_inventory.desert().helmet = 3;
+		sayCue(37, 3);
 	}
 	debugC(1, kDebugScene, "Runaway demo: animation %u finished, lid=%u unplugged=%u",
 		(uint)completed, (uint)_lidOpen, (uint)_unplugged);
 }
 
-void RunawayScene5030::skipVideo() {
+void Scene5030::skipVideo() {
 	if (playingVideo())
 		finishAction();
 }
 
-void RunawayScene5030::updateAction() {
+void Scene5030::updateAction() {
 	const uint previousStep = _step;
 	const uint32 elapsed = _now - _actionStarted;
 	if (_action == kWaitSpeech) {
@@ -858,8 +970,9 @@ void RunawayScene5030::updateAction() {
 		_step = (uint64)elapsed * 24 / 1000;
 		// Both demo movies run at 24 fps. Dispatch callbacks on crossing a
 		// frame, including delayed updates, so each effect plays exactly once.
-		if (_action == kIntroVideo && previousStep < 353 && _step >= 353)
-			_audio.playFootstep(3, _random.getRandomBit());
+		if (_action == kIntroVideo && previousStep < 353 && _step >= 353) {
+			_audio.playFootstep(3, _random.getRandomBit(), 255, 512);
+		}
 		if (_action == kCleanWindowVideo && previousStep < 56 && _step >= 56)
 			_audio.playEffect(22);
 		if (_step >= _video.frameCount()) {
@@ -888,23 +1001,26 @@ void RunawayScene5030::updateAction() {
 		switch (_action) {
 		case kIntro:
 			length = 19;
-			if (previousStep < 5 && _step >= 5)
-				_audio.playFootstep(3, _random.getRandomBit(), 179);
+			if (previousStep < 5 && _step >= 5) {
+				_audio.playFootstep(3, _random.getRandomBit(), 179, 512);
+			}
 			break;
 		case kOpenLid:
 		case kCloseLid: {
 			length = 33;
 			const uint start = _action == kOpenLid ? 18 : 11;
-			if (previousStep < start && _step >= start)
-				_audio.playEffect(80, 153);
+			if (previousStep < start && _step >= start) {
+				_audio.playEffectAt(80, Common::Point(1238, 200), 153);
+			}
 			if (previousStep < start + 4 && _step >= start + 4)
 				_audio.stopEffect();
 			break;
 		}
 		case kUnplug:
 			length = 83;
-			if (previousStep < 45 && _step >= 45)
-				_audio.playEffect(83);
+			if (previousStep < 45 && _step >= 45) {
+				_audio.playEffectAt(83, Common::Point(1273, 200));
+			}
 			break;
 		case kTryMoveCooler:
 			length = 74;
@@ -925,15 +1041,34 @@ void RunawayScene5030::updateAction() {
 			break;
 		case kOpenHatch:
 			length = 47;
-			if (previousStep < 25 && _step >= 25)
-				_audio.playEffect(17);
+			if (previousStep < 25 && _step >= 25) {
+				_audio.playEffectAt(17, Common::Point(1184, 200));
+			}
 			break;
 		case kEscape:
 			length = 37;
 			break;
+		case kEnterHatch:
+			length = 32;
+			if (previousStep < 24 && _step >= 24) {
+				_audio.playFootstep(3, _random.getRandomBit(), 230, 1238);
+			}
+			break;
 		case kPeekDoor:
 		case kReturnFromPeek:
 			length = 20;
+			break;
+		case kHeatHelmet:
+			length = 28;
+			if (previousStep < 22 && _step >= 22)
+				_audio.playEffect(70);
+			break;
+		case kStirHelmet:
+			length = 90;
+			if (previousStep < 5 && _step >= 5)
+				_audio.playEffect(71, 191);
+			if (previousStep < 81 && _step >= 81)
+				_audio.stopEffect();
 			break;
 		default:
 			break;
@@ -943,7 +1078,7 @@ void RunawayScene5030::updateAction() {
 	}
 }
 
-void RunawayScene5030::update(uint32 now, int scrollDirection, bool inventoryOpen) {
+void Scene5030::update(uint32 now, int scrollDirection, bool inventoryOpen) {
 	_now = now;
 	const uint elapsed = MIN<uint>(100, now - _lastUpdate);
 	const uint32 pausedTime = now - _lastUpdate;
@@ -992,7 +1127,7 @@ void RunawayScene5030::update(uint32 now, int scrollDirection, bool inventoryOpe
 	setCameraX(_cameraX);
 }
 
-void RunawayScene5030::draw() {
+void Scene5030::draw() {
 	_screen.clear();
 	if (_action == kPeekConversation) {
 		_interrogation.draw(_screen);
@@ -1038,8 +1173,14 @@ void RunawayScene5030::draw() {
 		_actionAnimation.draw(_screen, frame, _cameraX, kRoomTop);
 	} else if (_action == kOpenHatch || _action == kEscape) {
 		_actionAnimation.draw(_screen, MAX<uint>(1, _step), _cameraX, kRoomTop);
+	} else if (_action == kEnterHatch) {
+		_actionAnimation.draw(_screen, _step ? _step - 1 : 0, _cameraX, kRoomTop);
 	} else if (_action == kPeekDoor || _action == kReturnFromPeek) {
 		const uint frame = _action == kPeekDoor ? MAX<int>(0, (int)_step - 1) : 18 - MAX<int>(0, (int)_step - 1);
+		_actionAnimation.draw(_screen, frame, _cameraX, kRoomTop);
+	} else if (_action == kHeatHelmet || _action == kStirHelmet) {
+		const uint step = _action == kHeatHelmet ? _step : _step + 29;
+		const uint frame = step < 54 ? MAX<int>(0, (int)step - 1) : step < 103 ? 46 + (step - 54) % 7 : step - 50;
 		_actionAnimation.draw(_screen, frame, _cameraX, kRoomTop);
 	} else {
 		_actor.draw(_screen, _position, _cameraX, kRoomTop, _mask, _maps, _windowClean, _antialias);
@@ -1058,4 +1199,5 @@ void RunawayScene5030::draw() {
 	}
 }
 
+} // End of namespace Runaway
 } // End of namespace Hollywood

@@ -33,7 +33,7 @@
 		Common::EN_ANY,
 		Common::kPlatformWindows,
 		ADGF_UNSTABLE,
-		GUIO2(GUIO_NOMIDI, GUIO_NOLAUNCHLOAD)
+		GUIO2(GUIO_NOMIDI, GAMEOPTION_RESTORED_CONTENT)
 	},
 	// English GOG release, with Bink movies.
 	{
@@ -45,7 +45,19 @@
 		Common::EN_ANY,
 		Common::kPlatformWindows,
 		ADGF_UNSTABLE,
-		GUIO2(GUIO_NOMIDI, GUIO_NOLAUNCHLOAD)
+		GUIO2(GUIO_NOMIDI, GAMEOPTION_RESTORED_CONTENT)
+	},
+	// Spanish DVD release, with Bink movies.
+	{
+		"runaway",
+		"DVD",
+		AD_ENTRY3s("RESOURCE.000", "7484159230d1a921bda9927be4bd54ca", 110312901,
+			"RESOURCE.003", "8aa07584175fc9d28c1aff5fa5f93a5f", 7340291,
+			"RESOURCE.B02", "486eace90c76d8772d751a879466cc39", 8352653),
+		Common::ES_ESP,
+		Common::kPlatformWindows,
+		ADGF_UNSTABLE,
+		GUIO2(GUIO_NOMIDI, GAMEOPTION_RESTORED_CONTENT)
 	},
 	// English museum demo (2000). Gameplay POC; movies are not supported.
 	{
@@ -57,7 +69,7 @@
 		Common::EN_ANY,
 		Common::kPlatformWindows,
 		ADGF_DEMO | ADGF_UNSTABLE | GF_RUNAWAY_MUSEUM_DEMO,
-		GUIO3(GUIO_NOMIDI, GUIO_NOLAUNCHLOAD, GUIO_NOSPEECH)
+		GUIO2(GUIO_NOMIDI, GUIO_NOSPEECH)
 	},
 	// Spanish chapter-three demo (July 2001 build, Micromania 80).
 	{
@@ -69,7 +81,7 @@
 		Common::ES_ESP,
 		Common::kPlatformWindows,
 		ADGF_DEMO | ADGF_UNSTABLE,
-		GUIO2(GUIO_NOMIDI, GUIO_NOLAUNCHLOAD)
+		GUIO1(GUIO_NOMIDI)
 	},
 	// German Runaway demo, starting in the shack (scene 5030).
 	{
@@ -81,7 +93,7 @@
 		Common::DE_DEU,
 		Common::kPlatformWindows,
 		ADGF_DEMO | ADGF_UNSTABLE,
-		GUIO2(GUIO_NOMIDI, GUIO_NOLAUNCHLOAD)
+		GUIO1(GUIO_NOMIDI)
 	},
 	// French Runaway demo (February 2003 build), also starting in scene 5030.
 	{
@@ -93,7 +105,7 @@
 		Common::FR_FRA,
 		Common::kPlatformWindows,
 		ADGF_DEMO | ADGF_UNSTABLE,
-		GUIO2(GUIO_NOMIDI, GUIO_NOLAUNCHLOAD)
+		GUIO1(GUIO_NOMIDI)
 	},
 
 #endif // HOLLYWOOD_RUNAWAY_DETECTION_TABLES_H
